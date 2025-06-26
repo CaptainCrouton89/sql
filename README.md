@@ -1,197 +1,93 @@
-# MCP Server Boilerplate
+# Supabase SQL MCP Server
 
-A starter template for building MCP (Model Context Protocol) servers. This boilerplate provides a clean foundation for creating your own MCP server that can integrate with Claude, Cursor, or other MCP-compatible AI assistants.
-
-## Purpose
-
-This boilerplate helps you quickly start building:
-
-- Custom tools for AI assistants
-- Resource providers for dynamic content
-- Prompt templates for common operations
-- Integration points for external APIs and services
+A Model Context Protocol (MCP) server that provides SQL query execution capabilities for Supabase databases.
 
 ## Features
 
-- Simple "hello-world" tool example
-- TypeScript support with proper type definitions
-- Easy installation scripts for different MCP clients
-- Clean project structure ready for customization
+- Execute SQL queries on Supabase databases
+- Secure connection handling with SSL support
+- Structured response format with row data, field information, and metadata
+- Error handling and connection management
 
-## How It Works
+## Installation
 
-This MCP server template provides:
+### Prerequisites
 
-1. A basic server setup using the MCP SDK
-2. Example tool implementation
-3. Build and installation scripts
-4. TypeScript configuration for development
+- Node.js and npm/pnpm
+- A Supabase project with connection string
 
-The included example demonstrates how to create a simple tool that takes a name parameter and returns a greeting.
+### Environment Setup
 
-## Getting Started
+Create a `.env.local` file in the project root:
+
+```
+SUPABASE_CONNECTION_STRING=your_supabase_connection_string_here
+```
+
+### Build and Install
+
+Choose one of the following installation methods:
 
 ```bash
-# Clone the boilerplate
-git clone <your-repo-url>
-cd mcp-server-boilerplate
+# Install to all supported applications (Claude Desktop, Cursor, Claude Code)
+npm run install-server
 
-# Install dependencies
-pnpm install
-
-# Build the project
-pnpm run build
-
-# Start the server
-pnpm start
+# Or install to specific applications
+npm run install-desktop  # Claude Desktop only
+npm run install-cursor   # Cursor IDE only
+npm run install-code     # Claude Code only
 ```
 
-## Installation Scripts
+The installation script will:
+1. Build the TypeScript code
+2. Make the executable file executable
+3. Update the appropriate MCP configuration files
+4. Include environment variables from `.env.local`
 
-This boilerplate includes convenient installation scripts for different MCP clients:
+## Usage
 
-```bash
-# For Claude Desktop
-pnpm run install-desktop
+Once installed, you can use the `execute-sql` tool in your MCP-enabled application to run SQL queries:
 
-# For Cursor
-pnpm run install-cursor
+- **Tool name**: `execute-sql`
+- **Description**: Execute SQL queries on Supabase database
+- **Parameters**:
+  - `query` (string): The SQL query to execute
 
-# For Claude Code
-pnpm run install-code
+### Example Queries
 
-# Generic installation
-pnpm run install-server
+```sql
+SELECT * FROM users LIMIT 10;
+INSERT INTO posts (title, content) VALUES ('Hello', 'World');
+UPDATE users SET last_login = NOW() WHERE id = 1;
 ```
 
-These scripts will build the project and automatically update the appropriate configuration files.
+## Response Format
 
-## Usage with Claude Desktop
+The tool returns a JSON response with:
+- `rowCount`: Number of affected/returned rows
+- `rows`: Array of result rows
+- `fields`: Array of field metadata (name, dataTypeID)
+- `command`: SQL command type (SELECT, INSERT, etc.)
 
-The installation script will automatically add the configuration, but you can also manually add it to your `claude_desktop_config.json` file:
+## Configuration
 
-```json
-{
-  "mcpServers": {
-    "your-server-name": {
-      "command": "node",
-      "args": ["/path/to/your/dist/index.js"]
-    }
-  }
-}
-```
-
-Then restart Claude Desktop to connect to the server.
-
-## Customizing Your Server
-
-### Adding Tools
-
-Tools are functions that the AI assistant can call. Here's the basic structure:
-
-```typescript
-server.tool(
-  "tool-name",
-  "Description of what the tool does",
-  {
-    // Zod schema for parameters
-    param1: z.string().describe("Description of parameter"),
-    param2: z.number().optional().describe("Optional parameter"),
-  },
-  async ({ param1, param2 }) => {
-    // Your tool logic here
-    return {
-      content: [
-        {
-          type: "text",
-          text: "Your response",
-        },
-      ],
-    };
-  }
-);
-```
-
-### Adding Resources
-
-Resources provide dynamic content that the AI can access:
-
-```typescript
-server.resource(
-  "resource://example/{id}",
-  "Description of the resource",
-  async (uri) => {
-    // Extract parameters from URI
-    const id = uri.path.split("/").pop();
-
-    return {
-      contents: [
-        {
-          uri,
-          mimeType: "text/plain",
-          text: `Content for ${id}`,
-        },
-      ],
-    };
-  }
-);
-```
-
-### Adding Prompts
-
-Prompts are reusable templates:
-
-```typescript
-server.prompt(
-  "prompt-name",
-  "Description of the prompt",
-  {
-    // Parameters for the prompt
-    topic: z.string().describe("The topic to discuss"),
-  },
-  async ({ topic }) => {
-    return {
-      description: `A prompt about ${topic}`,
-      messages: [
-        {
-          role: "user",
-          content: {
-            type: "text",
-            text: `Please help me with ${topic}`,
-          },
-        },
-      ],
-    };
-  }
-);
-```
-
-## Project Structure
-
-```
-├── src/
-│   └── index.ts          # Main server implementation
-├── scripts/              # Installation and utility scripts
-├── dist/                 # Compiled JavaScript (generated)
-├── package.json          # Project configuration
-├── tsconfig.json         # TypeScript configuration
-└── README.md            # This file
-```
+The server is configured in your MCP client's configuration file:
+- **Claude Desktop**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Cursor**: `~/.cursor/mcp.json`
+- **Claude Code**: `~/.claude.json`
 
 ## Development
 
-1. Make changes to `src/index.ts`
-2. Run `pnpm run build` to compile
-3. Test your server with `pnpm start`
-4. Use the installation scripts to update your MCP client configuration
+```bash
+# Build the project
+npm run build
 
-## Next Steps
+# Start the server directly
+npm start
+```
 
-1. Update `package.json` with your project details
-2. Customize the server name and tools in `src/index.ts`
-3. Add your own tools, resources, and prompts
-4. Integrate with external APIs or databases as needed
+## Security Notes
 
-## License
-
-MIT
+- The server uses SSL connections with `rejectUnauthorized: false` for Supabase compatibility
+- Environment variables are loaded from `.env.local` and passed securely to the MCP configuration
+- Connection strings should never be committed to version control
