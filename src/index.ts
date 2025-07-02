@@ -547,6 +547,134 @@ server.tool(
   }
 );
 
+server.tool(
+  "get-function-definition",
+  "Get the complete definition of a single RPC function",
+  {
+    functionName: z
+      .string()
+      .describe("The name of the function to get definition for"),
+    schemaName: z
+      .string()
+      .optional()
+      .describe("Schema name (defaults to 'public')"),
+  },
+  async ({ functionName, schemaName = "public" }) => {
+    const client = new Client({
+      connectionString: CONNECTION_STRING,
+      ssl: {
+        rejectUnauthorized: false,
+      },
+    });
+
+    try {
+      await client.connect();
+
+      const functionQuery = `
+        SELECT 
+          p.proname as function_name,
+          pg_catalog.pg_get_function_result(p.oid) as return_type,
+          pg_catalog.pg_get_function_arguments(p.oid) as arguments,
+          pg_catalog.pg_get_functiondef(p.oid) as definition,
+          p.prokind as function_kind,
+          p.provolatile as volatility,
+          p.prosecdef as security_definer,
+          p.proisstrict as is_strict,
+          p.proretset as returns_set,
+          l.lanname as language,
+          d.description,
+          p.prosrc as source_code,
+          CASE p.provolatile
+            WHEN 'i' THEN 'IMMUTABLE'
+            WHEN 's' THEN 'STABLE'
+            WHEN 'v' THEN 'VOLATILE'
+          END as volatility_label
+        FROM pg_catalog.pg_proc p
+        LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+        LEFT JOIN pg_catalog.pg_description d ON d.objoid = p.oid
+        WHERE n.nspname = $1 AND p.proname = $2;
+      `;
+
+      const result = await client.query(functionQuery, [
+        schemaName,
+        functionName,
+      ]);
+
+      if (result.rowCount === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  error: true,
+                  message: `Function '${functionName}' not found in schema '${schemaName}'`,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      const func = result.rows[0];
+      const response = {
+        schemaName,
+        functionName: func.function_name,
+        returnType: func.return_type,
+        arguments: func.arguments,
+        definition: func.definition,
+        sourceCode: func.source_code,
+        language: func.language,
+        kind:
+          func.function_kind === "f"
+            ? "function"
+            : func.function_kind === "p"
+            ? "procedure"
+            : func.function_kind === "a"
+            ? "aggregate"
+            : "unknown",
+        volatility: func.volatility_label,
+        securityDefiner: func.security_definer,
+        isStrict: func.is_strict,
+        returnsSet: func.returns_set,
+        description: func.description || null,
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(response, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                error: true,
+                message: errorMessage,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } finally {
+      await client.end();
+    }
+  }
+);
+
 async function main() {
   try {
     const transport = new StdioServerTransport();
