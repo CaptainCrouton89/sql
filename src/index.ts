@@ -78,22 +78,49 @@ server.tool(
 
 server.tool(
   "describe-table",
-  "Get table structure and 3 sample rows",
+  "Get table structure",
   {
     tableName: z.string().describe("The name of the table to describe"),
     includeConstraints: z
       .boolean()
       .optional()
       .describe("Whether to include constraints"),
+    includeRlsPolicies: z
+      .boolean()
+      .optional()
+      .describe("Whether to include RLS policies"),
+    includeTriggers: z
+      .boolean()
+      .optional()
+      .describe("Whether to include triggers"),
+    includeIndexes: z
+      .boolean()
+      .optional()
+      .describe("Whether to include indexes")
+      .default(false),
+    includeDependencies: z
+      .boolean()
+      .optional()
+      .describe("Whether to include dependencies")
+      .default(false),
+    includeReferencedBy: z
+      .boolean()
+      .optional()
+      .describe("Whether to include tables that reference this table")
+      .default(false),
     includeSampleRows: z
       .boolean()
       .optional()
-      .describe("Whether to include sample rows")
-      .default(false),
+      .describe("Whether to include sample rows"),
   },
   async ({
     tableName,
     includeConstraints = false,
+    includeRlsPolicies = false,
+    includeTriggers = false,
+    includeIndexes = false,
+    includeDependencies = false,
+    includeReferencedBy = false,
     includeSampleRows = false,
   }) => {
     const client = new Client({
@@ -150,6 +177,104 @@ server.tool(
 
       const sampleQuery = `SELECT * FROM ${tableName} LIMIT 3;`;
 
+      const rlsPoliciesQuery = `
+        SELECT 
+          pol.polname as policy_name,
+          pol.polpermissive as is_permissive,
+          pol.polroles as roles,
+          pol.polcmd as command,
+          pg_get_expr(pol.polqual, pol.polrelid) as using_expression,
+          pg_get_expr(pol.polwithcheck, pol.polrelid) as with_check_expression
+        FROM pg_policy pol
+        JOIN pg_class pc ON pol.polrelid = pc.oid
+        WHERE pc.relname = $1
+        ORDER BY pol.polname;
+      `;
+
+      const triggersQuery = `
+        SELECT 
+          t.trigger_name,
+          t.event_manipulation as event,
+          t.event_object_table as table_name,
+          t.action_timing as timing,
+          t.action_statement as definition,
+          t.action_condition as condition,
+          t.action_orientation as orientation
+        FROM information_schema.triggers t
+        WHERE t.event_object_table = $1
+        ORDER BY t.trigger_name;
+      `;
+
+      const indexesQuery = `
+        SELECT 
+          i.indexname as index_name,
+          i.tablename as table_name,
+          i.indexdef as definition,
+          idx.indisunique as is_unique,
+          idx.indisprimary as is_primary,
+          idx.indisexclusion as is_exclusion,
+          idx.indimmediate as is_immediate,
+          idx.indisclustered as is_clustered,
+          idx.indisvalid as is_valid,
+          am.amname as index_type,
+          pg_size_pretty(pg_relation_size(idx_class.oid)) as size
+        FROM pg_indexes i
+        JOIN pg_class c ON c.relname = i.tablename
+        JOIN pg_index idx ON idx.indrelid = c.oid
+        JOIN pg_class idx_class ON idx_class.oid = idx.indexrelid AND idx_class.relname = i.indexname
+        JOIN pg_am am ON am.oid = idx_class.relam
+        WHERE i.tablename = $1
+        ORDER BY i.indexname;
+      `;
+
+      const dependenciesQuery = `
+        SELECT DISTINCT
+          d.classid::regclass AS object_type,
+          d.objid::regclass AS object_name,
+          d.objsubid AS object_subid,
+          d.refclassid::regclass AS referenced_type,
+          d.refobjid::regclass AS referenced_name,
+          d.refobjsubid AS referenced_subid,
+          d.deptype AS dependency_type,
+          CASE d.deptype
+            WHEN 'n' THEN 'normal'
+            WHEN 'a' THEN 'auto'
+            WHEN 'i' THEN 'internal'
+            WHEN 'e' THEN 'extension'
+            WHEN 'p' THEN 'pin'
+            WHEN 'x' THEN 'extension member'
+          END AS dependency_type_desc
+        FROM pg_depend d
+        JOIN pg_class c ON d.objid = c.oid
+        WHERE c.relname = $1
+        AND d.deptype IN ('n', 'a', 'i')
+        ORDER BY dependency_type, referenced_name;
+      `;
+
+      const referencedByQuery = `
+        SELECT DISTINCT
+          tc.table_name AS referencing_table,
+          kcu.column_name AS referencing_column,
+          ccu.table_name AS referenced_table,
+          ccu.column_name AS referenced_column,
+          tc.constraint_name,
+          rc.update_rule,
+          rc.delete_rule
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name
+          AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu
+          ON tc.constraint_name = ccu.constraint_name
+          AND tc.table_schema = ccu.table_schema
+        JOIN information_schema.referential_constraints rc
+          ON tc.constraint_name = rc.constraint_name
+          AND tc.table_schema = rc.constraint_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+        AND ccu.table_name = $1
+        ORDER BY tc.table_name, kcu.column_name;
+      `;
+
       const queries = [client.query(structureQuery, [tableName])];
 
       if (includeConstraints) {
@@ -160,19 +285,66 @@ server.tool(
         queries.push(client.query(sampleQuery));
       }
 
+      if (includeRlsPolicies) {
+        queries.push(client.query(rlsPoliciesQuery, [tableName]));
+      }
+
+      if (includeTriggers) {
+        queries.push(client.query(triggersQuery, [tableName]));
+      }
+
+      if (includeIndexes) {
+        queries.push(client.query(indexesQuery, [tableName]));
+      }
+
+      if (includeDependencies) {
+        queries.push(client.query(dependenciesQuery, [tableName]));
+      }
+
+      if (includeReferencedBy) {
+        queries.push(client.query(referencedByQuery, [tableName]));
+      }
+
       const results = await Promise.all(queries);
       const structureResult = results[0];
 
       let constraintsResult = null;
       let sampleResult = null;
+      let rlsPoliciesResult = null;
+      let triggersResult = null;
+      let indexesResult = null;
+      let dependenciesResult = null;
+      let referencedByResult = null;
 
-      if (includeConstraints && includeSampleRows) {
-        constraintsResult = results[1];
-        sampleResult = results[2];
-      } else if (includeConstraints) {
-        constraintsResult = results[1];
-      } else if (includeSampleRows) {
-        sampleResult = results[1];
+      // Track which queries were executed to properly index results
+      let queryIndex = 1;
+
+      if (includeConstraints) {
+        constraintsResult = results[queryIndex++];
+      }
+
+      if (includeSampleRows) {
+        sampleResult = results[queryIndex++];
+      }
+
+      if (includeRlsPolicies) {
+        rlsPoliciesResult = results[queryIndex++];
+      }
+
+      if (includeTriggers) {
+        triggersResult = results[queryIndex++];
+      }
+      
+      if (includeIndexes) {
+        indexesResult = results[queryIndex++];
+      }
+      
+      if (includeDependencies) {
+        dependenciesResult = results[queryIndex++];
+      }
+      
+      if (includeReferencedBy) {
+        referencedByResult = results[queryIndex++];
       }
 
       const constraintsByColumn = constraintsResult
@@ -214,6 +386,70 @@ server.tool(
       if (includeSampleRows && sampleResult) {
         response.sampleRows = sampleResult.rows;
         response.rowCount = sampleResult.rowCount;
+      }
+
+      if (includeRlsPolicies && rlsPoliciesResult) {
+        response.rlsPolicies = rlsPoliciesResult.rows.map((policy) => ({
+          policyName: policy.policy_name,
+          isPermissive: policy.is_permissive,
+          roles: policy.roles,
+          command: policy.command,
+          usingExpression: policy.using_expression,
+          withCheckExpression: policy.with_check_expression,
+        }));
+      }
+
+      if (includeTriggers && triggersResult) {
+        response.triggers = triggersResult.rows.map((trigger) => ({
+          triggerName: trigger.trigger_name,
+          event: trigger.event,
+          tableName: trigger.table_name,
+          timing: trigger.timing,
+          definition: trigger.definition,
+          condition: trigger.condition,
+          orientation: trigger.orientation,
+        }));
+      }
+
+      if (includeIndexes && indexesResult) {
+        response.indexes = indexesResult.rows.map((index) => ({
+          indexName: index.index_name,
+          tableName: index.table_name,
+          definition: index.definition,
+          isUnique: index.is_unique,
+          isPrimary: index.is_primary,
+          isExclusion: index.is_exclusion,
+          isImmediate: index.is_immediate,
+          isClustered: index.is_clustered,
+          isValid: index.is_valid,
+          indexType: index.index_type,
+          size: index.size,
+        }));
+      }
+
+      if (includeDependencies && dependenciesResult) {
+        response.dependencies = dependenciesResult.rows.map((dep) => ({
+          objectType: dep.object_type,
+          objectName: dep.object_name,
+          objectSubid: dep.object_subid,
+          referencedType: dep.referenced_type,
+          referencedName: dep.referenced_name,
+          referencedSubid: dep.referenced_subid,
+          dependencyType: dep.dependency_type,
+          dependencyTypeDesc: dep.dependency_type_desc,
+        }));
+      }
+
+      if (includeReferencedBy && referencedByResult) {
+        response.referencedBy = referencedByResult.rows.map((ref) => ({
+          referencingTable: ref.referencing_table,
+          referencingColumn: ref.referencing_column,
+          referencedTable: ref.referenced_table,
+          referencedColumn: ref.referenced_column,
+          constraintName: ref.constraint_name,
+          updateRule: ref.update_rule,
+          deleteRule: ref.delete_rule,
+        }));
       }
 
       return {
@@ -395,124 +631,6 @@ server.tool(
         schemaName,
         tables: tablesWithRowCounts,
         count: result.rowCount,
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(response, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                error: true,
-                message: errorMessage,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
-    } finally {
-      await client.end();
-    }
-  }
-);
-
-server.tool(
-  "show-constraints",
-  "Show all constraints (foreign keys, unique, check, etc.) for a table or schema",
-  {
-    tableName: z.string().optional().describe("Specific table name (optional)"),
-    schemaName: z
-      .string()
-      .optional()
-      .describe("Schema name (defaults to 'public')"),
-  },
-  async ({ tableName, schemaName = "public" }) => {
-    const client = new Client({
-      connectionString: CONNECTION_STRING,
-      ssl: {
-        rejectUnauthorized: false,
-      },
-    });
-
-    try {
-      await client.connect();
-
-      let constraintsQuery = `
-        SELECT 
-          tc.table_name,
-          tc.constraint_name,
-          tc.constraint_type,
-          kcu.column_name,
-          ccu.table_name AS foreign_table_name,
-          ccu.column_name AS foreign_column_name,
-          rc.update_rule,
-          rc.delete_rule,
-          cc.check_clause
-        FROM information_schema.table_constraints tc
-        LEFT JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-          AND tc.table_schema = kcu.table_schema
-        LEFT JOIN information_schema.constraint_column_usage ccu
-          ON tc.constraint_name = ccu.constraint_name
-          AND tc.table_schema = ccu.table_schema
-        LEFT JOIN information_schema.referential_constraints rc
-          ON tc.constraint_name = rc.constraint_name
-          AND tc.table_schema = rc.constraint_schema
-        LEFT JOIN information_schema.check_constraints cc
-          ON tc.constraint_name = cc.constraint_name
-          AND tc.table_schema = cc.constraint_schema
-        WHERE tc.table_schema = $1
-      `;
-
-      const params = [schemaName];
-
-      if (tableName) {
-        constraintsQuery += " AND tc.table_name = $2";
-        params.push(tableName);
-      }
-
-      constraintsQuery += " ORDER BY tc.table_name, tc.constraint_name;";
-
-      const result = await client.query(constraintsQuery, params);
-
-      const groupedConstraints = result.rows.reduce((acc, row) => {
-        const table = row.table_name;
-        if (!acc[table]) {
-          acc[table] = [];
-        }
-
-        acc[table].push({
-          constraintName: row.constraint_name,
-          constraintType: row.constraint_type,
-          columnName: row.column_name,
-          foreignTableName: row.foreign_table_name,
-          foreignColumnName: row.foreign_column_name,
-          updateRule: row.update_rule,
-          deleteRule: row.delete_rule,
-          checkClause: row.check_clause,
-        });
-
-        return acc;
-      }, {} as Record<string, any[]>);
-
-      const response = {
-        schemaName,
-        tableName: tableName || "all tables",
-        constraints: groupedConstraints,
-        totalConstraints: result.rowCount,
       };
 
       return {
