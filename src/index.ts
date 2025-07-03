@@ -380,7 +380,9 @@ server.tool(
       };
 
       if (includeConstraints && constraintsResult) {
-        response.constraints = constraintsResult.rows;
+        response.constraints = constraintsResult.rows.filter(constraint => 
+          constraint.constraint_name && constraint.constraint_type
+        );
       }
 
       if (includeSampleRows && sampleResult) {
