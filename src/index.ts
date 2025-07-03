@@ -391,24 +391,28 @@ server.tool(
       }
 
       if (includeRlsPolicies && rlsPoliciesResult) {
-        response.rlsPolicies = rlsPoliciesResult.rows.map((policy) => ({
+        response.rlsPolicies = rlsPoliciesResult.rows.filter(policy => 
+          policy.policy_name
+        ).map((policy) => ({
           policyName: policy.policy_name,
           isPermissive: policy.is_permissive,
           roles: policy.roles,
           command: policy.command,
-          usingExpression: policy.using_expression,
-          withCheckExpression: policy.with_check_expression,
+          ...(policy.using_expression && { usingExpression: policy.using_expression }),
+          ...(policy.with_check_expression && { withCheckExpression: policy.with_check_expression }),
         }));
       }
 
       if (includeTriggers && triggersResult) {
-        response.triggers = triggersResult.rows.map((trigger) => ({
+        response.triggers = triggersResult.rows.filter(trigger => 
+          trigger.trigger_name
+        ).map((trigger) => ({
           triggerName: trigger.trigger_name,
           event: trigger.event,
           tableName: trigger.table_name,
           timing: trigger.timing,
           definition: trigger.definition,
-          condition: trigger.condition,
+          ...(trigger.condition && { condition: trigger.condition }),
           orientation: trigger.orientation,
         }));
       }
@@ -536,7 +540,7 @@ server.tool(
               : row.function_kind === "a"
               ? "aggregate"
               : "unknown",
-          description: row.description || null,
+          ...(row.description && { description: row.description }),
         })),
         count: result.rowCount,
       };
@@ -760,7 +764,7 @@ server.tool(
         securityDefiner: func.security_definer,
         isStrict: func.is_strict,
         returnsSet: func.returns_set,
-        description: func.description || null,
+        ...(func.description && { description: func.description }),
       };
 
       return {
