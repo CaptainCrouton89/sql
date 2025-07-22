@@ -42,7 +42,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const server = new McpServer({
-  name: "supabase-sql",
+  name: "supabase",
   version: "1.0.0",
 });
 
@@ -103,7 +103,7 @@ async function main() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("Supabase SQL MCP Server running...");
+    console.error("Supabase MCP Server running...");
   } catch (error) {
     console.error("Error starting server:", error);
     process.exit(1);

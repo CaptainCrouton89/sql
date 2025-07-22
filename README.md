@@ -1,10 +1,11 @@
-# Supabase SQL MCP Server
+# Supabase MCP Server
 
-A Model Context Protocol (MCP) server that provides SQL query execution capabilities for Supabase databases.
+A Model Context Protocol (MCP) server that provides database and storage capabilities for Supabase.
 
 ## Features
 
 - Execute SQL queries on Supabase databases
+- Manage Supabase storage buckets and files
 - Secure connection handling with SSL support
 - Structured response format with row data, field information, and metadata
 - Error handling and connection management
@@ -46,7 +47,7 @@ The installation script will:
 
 ## Usage
 
-Once installed, you can use the `execute-sql` tool in your MCP-enabled application to run SQL queries:
+Once installed, you can use the various tools in your MCP-enabled application:
 
 - **Tool name**: `execute-sql`
 - **Description**: Execute SQL queries on Supabase database
