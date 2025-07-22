@@ -1,4 +1,6 @@
 import { z } from "zod";
+import fs from "fs";
+import path from "path";
 import { createSuccessResponse, createErrorResponse } from "../utils/response.js";
 
 export function createUploadFileTool(supabaseUrl: string, serviceKey: string) {
@@ -8,7 +10,8 @@ export function createUploadFileTool(supabaseUrl: string, serviceKey: string) {
     inputSchema: {
       bucketName: z.string().describe("The name of the storage bucket"),
       filePath: z.string().describe("The file path within the bucket"),
-      fileContent: z.string().describe("Base64 encoded file content"),
+      fileContent: z.string().optional().describe("Base64 encoded file content"),
+      localFilePath: z.string().optional().describe("Local file path to upload (alternative to fileContent)"),
       contentType: z
         .string()
         .optional()
@@ -24,23 +27,85 @@ export function createUploadFileTool(supabaseUrl: string, serviceKey: string) {
       bucketName,
       filePath,
       fileContent,
+      localFilePath,
       contentType,
       cacheControl,
       upsert,
     }: {
       bucketName: string;
       filePath: string;
-      fileContent: string;
+      fileContent?: string;
+      localFilePath?: string;
       contentType?: string;
       cacheControl?: string;
       upsert?: boolean;
     }) => {
       try {
-        const buffer = Buffer.from(fileContent, "base64");
+        // Validate that exactly one of fileContent or localFilePath is provided
+        if (!fileContent && !localFilePath) {
+          return createErrorResponse({
+            status: 400,
+            message: "Either fileContent or localFilePath must be provided",
+          });
+        }
+        
+        if (fileContent && localFilePath) {
+          return createErrorResponse({
+            status: 400,
+            message: "Cannot provide both fileContent and localFilePath",
+          });
+        }
+
+        let buffer: Buffer;
+        let detectedContentType: string | undefined;
+
+        if (localFilePath) {
+          // Read file from local path
+          if (!fs.existsSync(localFilePath)) {
+            return createErrorResponse({
+              status: 404,
+              message: `File not found: ${localFilePath}`,
+            });
+          }
+
+          try {
+            buffer = fs.readFileSync(localFilePath);
+          } catch (error) {
+            return createErrorResponse({
+              status: 500,
+              message: `Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            });
+          }
+
+          // Auto-detect content type if not provided
+          if (!contentType) {
+            const ext = path.extname(localFilePath).toLowerCase();
+            const mimeTypes: Record<string, string> = {
+              '.jpg': 'image/jpeg',
+              '.jpeg': 'image/jpeg',
+              '.png': 'image/png',
+              '.gif': 'image/gif',
+              '.webp': 'image/webp',
+              '.svg': 'image/svg+xml',
+              '.pdf': 'application/pdf',
+              '.txt': 'text/plain',
+              '.html': 'text/html',
+              '.css': 'text/css',
+              '.js': 'application/javascript',
+              '.json': 'application/json',
+              '.xml': 'application/xml',
+              '.zip': 'application/zip',
+            };
+            detectedContentType = mimeTypes[ext];
+          }
+        } else {
+          // Use provided base64 content
+          buffer = Buffer.from(fileContent!, "base64");
+        }
 
         const headers: Record<string, string> = {
           Authorization: `Bearer ${serviceKey}`,
-          "Content-Type": contentType || "application/octet-stream",
+          "Content-Type": contentType || detectedContentType || "application/octet-stream",
         };
 
         if (cacheControl) {
@@ -70,7 +135,9 @@ export function createUploadFileTool(supabaseUrl: string, serviceKey: string) {
           bucketName,
           filePath,
           size: buffer.length,
-          contentType,
+          contentType: contentType || detectedContentType,
+          uploadedFrom: localFilePath ? 'local-file' : 'base64-content',
+          localFilePath: localFilePath || undefined,
           ...result,
         });
       } catch (error) {
