@@ -10,7 +10,14 @@ const projectName = path.basename(currentDir);
 
 // Parse command line arguments
 const args = process.argv.slice(2);
-const validApps = ["cursor", "desktop", "code", "gemini", "mcp"];
+const validApps = [
+  "cursor",
+  "desktop",
+  "code",
+  "code-library",
+  "gemini",
+  "mcp",
+];
 
 // If no arguments provided, install to all apps
 let appsToInstall = validApps;
@@ -22,10 +29,10 @@ if (args.length > 0) {
     console.error(`❌ Invalid arguments: ${invalidArgs.join(", ")}`);
     console.error(`   Valid options: ${validApps.join(", ")}`);
     console.error(
-      `   Usage: node update-claude-config.js [cursor] [desktop] [code] [gemini] [mcp]`
+      `   Usage: node update-claude-config.js [cursor] [desktop] [code] [code-library] [gemini] [mcp]`
     );
     console.error(
-      `   Example: node update-claude-config.js cursor code gemini mcp`
+      `   Example: node update-claude-config.js cursor code code-library gemini mcp`
     );
     console.error(`   (No arguments installs to all applications)`);
     process.exit(1);
@@ -41,7 +48,12 @@ const claudeDesktopConfigPath = path.join(
 
 const cursorConfigPath = path.join(os.homedir(), ".cursor/mcp.json");
 
-const claudeCodeConfigPath = path.join(os.homedir(), ".claude.json");
+const claudeCodeConfigPath = path.join(os.homedir(), ".claude/mcp.json");
+
+const claudeCodeLibraryConfigPath = path.join(
+  os.homedir(),
+  ".claude/mcp-library/.mcp.json"
+);
 
 const geminiConfigPath = path.join(os.homedir(), ".gemini/settings.json");
 
@@ -97,12 +109,30 @@ function parseEnvFile() {
 // Parse environment variables
 const envVars = parseEnvFile();
 
-// Server configuration
-const serverConfig = {
+// Get package name from package.json
+const packageJsonPath = path.join(currentDir, "package.json");
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+const packageName = packageJson.name;
+
+// Server configuration for npx (remote)
+const npxServerConfig = {
+  command: "npx",
+  args: ["-y", `${packageName}@latest`],
+};
+
+if (Object.keys(envVars).length > 0) {
+  npxServerConfig.env = envVars;
+}
+
+// Server configuration for local development (mcp only)
+const localServerConfig = {
   command: "node",
   args: [path.join(currentDir, "dist/index.js")],
-  ...(Object.keys(envVars).length > 0 && { env: envVars }),
 };
+
+if (Object.keys(envVars).length > 0) {
+  localServerConfig.env = envVars;
+}
 
 // Function to update Claude Desktop config
 function updateClaudeDesktopConfig() {
@@ -120,7 +150,7 @@ function updateClaudeDesktopConfig() {
       config.mcpServers = {};
     }
 
-    config.mcpServers[projectName] = serverConfig;
+    config.mcpServers[projectName] = npxServerConfig;
 
     // Write the updated config back to the file
     fs.writeFileSync(
@@ -161,7 +191,7 @@ function updateCursorConfig() {
       config.mcpServers = {};
     }
 
-    config.mcpServers[projectName] = serverConfig;
+    config.mcpServers[projectName] = npxServerConfig;
 
     // Write the updated config back to the file
     fs.writeFileSync(cursorConfigPath, JSON.stringify(config, null, 2), "utf8");
@@ -177,6 +207,12 @@ function updateCursorConfig() {
 // Function to update Claude Code config
 function updateClaudeCodeConfig() {
   try {
+    // Ensure .claude directory exists
+    const claudeDir = path.dirname(claudeCodeConfigPath);
+    if (!fs.existsSync(claudeDir)) {
+      fs.mkdirSync(claudeDir, { recursive: true });
+    }
+
     let config = {};
 
     // Read existing config if it exists
@@ -190,7 +226,7 @@ function updateClaudeCodeConfig() {
       config.mcpServers = {};
     }
 
-    config.mcpServers[projectName] = serverConfig;
+    config.mcpServers[projectName] = npxServerConfig;
 
     // Write the updated config back to the file
     fs.writeFileSync(
@@ -205,6 +241,49 @@ function updateClaudeCodeConfig() {
     return true;
   } catch (error) {
     console.log(`⚠️  Could not update Claude Code config: ${error.message}`);
+    return false;
+  }
+}
+
+// Function to update Claude Code Library config
+function updateClaudeCodeLibraryConfig() {
+  try {
+    // Ensure .claude/mcp-library directory exists
+    const claudeLibraryDir = path.dirname(claudeCodeLibraryConfigPath);
+    if (!fs.existsSync(claudeLibraryDir)) {
+      fs.mkdirSync(claudeLibraryDir, { recursive: true });
+    }
+
+    let config = {};
+
+    // Read existing config if it exists
+    if (fs.existsSync(claudeCodeLibraryConfigPath)) {
+      const configData = fs.readFileSync(claudeCodeLibraryConfigPath, "utf8");
+      config = JSON.parse(configData);
+    }
+
+    // Add our MCP server to the config
+    if (!config.mcpServers) {
+      config.mcpServers = {};
+    }
+
+    config.mcpServers[projectName] = npxServerConfig;
+
+    // Write the updated config back to the file
+    fs.writeFileSync(
+      claudeCodeLibraryConfigPath,
+      JSON.stringify(config, null, 2),
+      "utf8"
+    );
+    console.log(
+      `✅ Successfully updated Claude Code Library config at ${claudeCodeLibraryConfigPath}`
+    );
+    console.log(`   Added server: ${projectName}`);
+    return true;
+  } catch (error) {
+    console.log(
+      `⚠️  Could not update Claude Code Library config: ${error.message}`
+    );
     return false;
   }
 }
@@ -231,7 +310,7 @@ function updateGeminiConfig() {
       config.mcpServers = {};
     }
 
-    config.mcpServers[projectName] = serverConfig;
+    config.mcpServers[projectName] = npxServerConfig;
 
     // Write the updated config back to the file
     fs.writeFileSync(geminiConfigPath, JSON.stringify(config, null, 2), "utf8");
@@ -262,7 +341,7 @@ function updateMcpConfig() {
       config.mcpServers = {};
     }
 
-    config.mcpServers[projectName] = serverConfig;
+    config.mcpServers[projectName] = localServerConfig;
 
     // Write the updated config back to the file
     fs.writeFileSync(mcpConfigPath, JSON.stringify(config, null, 2), "utf8");
@@ -284,6 +363,7 @@ console.log("");
 let claudeSuccess = false;
 let cursorSuccess = false;
 let claudeCodeSuccess = false;
+let claudeCodeLibrarySuccess = false;
 let geminiSuccess = false;
 let mcpSuccess = false;
 
@@ -300,6 +380,10 @@ if (appsToInstall.includes("code")) {
   claudeCodeSuccess = updateClaudeCodeConfig();
 }
 
+if (appsToInstall.includes("code-library")) {
+  claudeCodeLibrarySuccess = updateClaudeCodeLibraryConfig();
+}
+
 if (appsToInstall.includes("gemini")) {
   geminiSuccess = updateGeminiConfig();
 }
@@ -313,6 +397,7 @@ if (
   claudeSuccess ||
   cursorSuccess ||
   claudeCodeSuccess ||
+  claudeCodeLibrarySuccess ||
   geminiSuccess ||
   mcpSuccess
 ) {
@@ -332,6 +417,12 @@ if (
     console.log("   • Restart claude-code to use the new server");
   }
 
+  if (claudeCodeLibrarySuccess) {
+    console.log(
+      "   • Restart claude-code and run /init-workspace to configure mcps for the new workspace"
+    );
+  }
+
   if (geminiSuccess) {
     console.log("   • Restart Gemini to use the new server");
   }
@@ -339,17 +430,6 @@ if (
   if (mcpSuccess) {
     console.log("   • MCP configuration updated in .mcp.json");
   }
-
-  console.log("");
-  console.log("📖 Usage:");
-  console.log(
-    "   You can now use the image tools for AI generation and editing:"
-  );
-  console.log("   • generate-image: Create AI images with various models");
-  console.log("   • apply-filter: Add effects like blur, sharpen, brightness");
-  console.log("   • crop-image, resize-image, rotate-image: Edit dimensions");
-  console.log("   • convert-image-format: Convert between formats");
-  console.log("   • get-image-metadata: Extract image information");
 } else {
   console.log("❌ Installation failed for selected applications");
   console.log(

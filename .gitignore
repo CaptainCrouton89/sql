@@ -4,3 +4,4 @@ dist
 .env
 .env.local
 .mcp.json
+.DS_Store
