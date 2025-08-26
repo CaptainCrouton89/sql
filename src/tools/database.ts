@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { executeWithClient } from "../utils/database.js";
-import { createSuccessResponse, createErrorResponse, createMarkdownResponse } from "../utils/response.js";
+import {
+  createErrorResponse,
+  createMarkdownResponse,
+  createSuccessResponse,
+} from "../utils/response.js";
 
 export function createExecuteSqlTool(connectionString: string) {
   return {
     name: "execute-sql",
-    description: "Execute SQL queries on Supabase database",
+    description:
+      "Execute SQL queries on Supabase database. Remember to fetch the table structure before guessing at the schema.",
     inputSchema: {
       query: z.string().describe("The SQL query to execute"),
     },
@@ -13,7 +18,7 @@ export function createExecuteSqlTool(connectionString: string) {
       try {
         return await executeWithClient(connectionString, async (client) => {
           const result = await client.query(query);
-          
+
           const response = {
             rowCount: result.rowCount,
             rows: result.rows,
@@ -37,7 +42,8 @@ export function createExecuteSqlTool(connectionString: string) {
 export function createDescribeTableTool(connectionString: string) {
   return {
     name: "describe-table",
-    description: "Get table structure",
+    description:
+      "Get table structure, including constraints, RLS policies, triggers, indexes, dependencies, and referenced by. Use this first before making specific queries against a table.",
     inputSchema: {
       tableName: z.string().describe("The name of the table to describe"),
       includeConstraints: z
@@ -424,33 +430,47 @@ export function createDescribeTableTool(connectionString: string) {
 
           // Create markdown format for more token efficiency
           let markdown = `## ${tableName}\n\n`;
-          
+
           // Table structure
           markdown += `| Column | Type | Nullable | Default |\n`;
           markdown += `|--------|------|----------|----------|\n`;
-          
+
           for (const column of enrichedStructure) {
-            const nullable = column.is_nullable === 'YES' ? '✓' : '';
-            const defaultVal = column.column_default || '';
-            const precision = column.numeric_precision ? `(${column.numeric_precision}${column.numeric_scale ? `,${column.numeric_scale}` : ''})` : '';
-            const length = column.character_maximum_length ? `(${column.character_maximum_length})` : '';
+            const nullable = column.is_nullable === "YES" ? "✓" : "";
+            const defaultVal = column.column_default || "";
+            const precision = column.numeric_precision
+              ? `(${column.numeric_precision}${
+                  column.numeric_scale ? `,${column.numeric_scale}` : ""
+                })`
+              : "";
+            const length = column.character_maximum_length
+              ? `(${column.character_maximum_length})`
+              : "";
             const type = `${column.data_type}${precision}${length}`;
-            
+
             markdown += `| ${column.column_name} | ${type} | ${nullable} | ${defaultVal} |\n`;
-            
+
             // Add constraints inline if any
             if (includeConstraints && column.constraints?.length > 0) {
               for (const constraint of column.constraints) {
-                const fk = constraint.foreignTable && constraint.foreignColumn ? 
-                  ` → ${constraint.foreignTable}.${constraint.foreignColumn}` : '';
+                const fk =
+                  constraint.foreignTable && constraint.foreignColumn
+                    ? ` → ${constraint.foreignTable}.${constraint.foreignColumn}`
+                    : "";
                 markdown += `|   | *${constraint.type}*${fk} | | |\n`;
               }
             }
           }
-          
+
           // Table-level constraints
-          if (includeConstraints && constraintsResult && constraintsResult.rows.length > 0) {
-            const tableConstraints = constraintsResult.rows.filter(c => !c.column_name);
+          if (
+            includeConstraints &&
+            constraintsResult &&
+            constraintsResult.rows.length > 0
+          ) {
+            const tableConstraints = constraintsResult.rows.filter(
+              (c) => !c.column_name
+            );
             if (tableConstraints.length > 0) {
               markdown += `\n### Constraints\n`;
               for (const constraint of tableConstraints) {
@@ -462,29 +482,39 @@ export function createDescribeTableTool(connectionString: string) {
               }
             }
           }
-          
+
           // Sample rows
-          if (includeSampleRows && sampleResult && sampleResult.rows.length > 0) {
+          if (
+            includeSampleRows &&
+            sampleResult &&
+            sampleResult.rows.length > 0
+          ) {
             markdown += `\n### Sample Data\n`;
             const rows = sampleResult.rows;
             const headers = Object.keys(rows[0]);
-            
-            markdown += `| ${headers.join(' | ')} |\n`;
-            markdown += `|${headers.map(() => '---').join('|')}|\n`;
-            
+
+            markdown += `| ${headers.join(" | ")} |\n`;
+            markdown += `|${headers.map(() => "---").join("|")}|\n`;
+
             for (const row of rows) {
-              const values = headers.map(h => {
+              const values = headers.map((h) => {
                 const val = row[h];
-                return val === null ? '*null*' : String(val);
+                return val === null ? "*null*" : String(val);
               });
-              markdown += `| ${values.join(' | ')} |\n`;
+              markdown += `| ${values.join(" | ")} |\n`;
             }
           }
-          
+
           // RLS Policies
-          if (includeRlsPolicies && rlsPoliciesResult && rlsPoliciesResult.rows.length > 0) {
+          if (
+            includeRlsPolicies &&
+            rlsPoliciesResult &&
+            rlsPoliciesResult.rows.length > 0
+          ) {
             markdown += `\n### RLS Policies\n`;
-            for (const policy of rlsPoliciesResult.rows.filter(p => p.policy_name)) {
+            for (const policy of rlsPoliciesResult.rows.filter(
+              (p) => p.policy_name
+            )) {
               markdown += `- **${policy.policy_name}** (${policy.command})\n`;
               if (policy.using_expression) {
                 markdown += `  - Using: ${policy.using_expression}\n`;
@@ -494,43 +524,61 @@ export function createDescribeTableTool(connectionString: string) {
               }
             }
           }
-          
+
           // Triggers
-          if (includeTriggers && triggersResult && triggersResult.rows.length > 0) {
+          if (
+            includeTriggers &&
+            triggersResult &&
+            triggersResult.rows.length > 0
+          ) {
             markdown += `\n### Triggers\n`;
-            for (const trigger of triggersResult.rows.filter(t => t.trigger_name)) {
+            for (const trigger of triggersResult.rows.filter(
+              (t) => t.trigger_name
+            )) {
               markdown += `- **${trigger.trigger_name}** (${trigger.timing} ${trigger.event})\n`;
             }
           }
-          
+
           // Indexes
-          if (includeIndexes && indexesResult && indexesResult.rows.length > 0) {
+          if (
+            includeIndexes &&
+            indexesResult &&
+            indexesResult.rows.length > 0
+          ) {
             markdown += `\n### Indexes\n`;
             for (const index of indexesResult.rows) {
               const flags = [];
-              if (index.is_primary) flags.push('PRIMARY');
-              if (index.is_unique) flags.push('UNIQUE');
-              const flagStr = flags.length > 0 ? ` (${flags.join(', ')})` : '';
+              if (index.is_primary) flags.push("PRIMARY");
+              if (index.is_unique) flags.push("UNIQUE");
+              const flagStr = flags.length > 0 ? ` (${flags.join(", ")})` : "";
               markdown += `- **${index.index_name}**${flagStr} - ${index.size}\n`;
             }
           }
-          
+
           // Dependencies
-          if (includeDependencies && dependenciesResult && dependenciesResult.rows.length > 0) {
+          if (
+            includeDependencies &&
+            dependenciesResult &&
+            dependenciesResult.rows.length > 0
+          ) {
             markdown += `\n### Dependencies\n`;
             for (const dep of dependenciesResult.rows) {
               markdown += `- ${dep.object_name} → ${dep.referenced_name} (${dep.dependency_type_desc})\n`;
             }
           }
-          
+
           // Referenced by
-          if (includeReferencedBy && referencedByResult && referencedByResult.rows.length > 0) {
+          if (
+            includeReferencedBy &&
+            referencedByResult &&
+            referencedByResult.rows.length > 0
+          ) {
             markdown += `\n### Referenced By\n`;
             for (const ref of referencedByResult.rows) {
               markdown += `- ${ref.referencing_table}.${ref.referencing_column}\n`;
             }
           }
-          
+
           return createMarkdownResponse(markdown);
         });
       } catch (error) {
@@ -650,12 +698,15 @@ export function createListTablesTool(connectionString: string) {
           let markdown = `## Tables in ${schemaName}\n\n`;
           markdown += `| Table | Columns | Rows |\n`;
           markdown += `|-------|---------|------|\n`;
-          
+
           for (const table of tablesWithRowCounts) {
-            const rowCount = table.row_count !== null ? table.row_count.toLocaleString() : 'Error';
+            const rowCount =
+              table.row_count !== null
+                ? table.row_count.toLocaleString()
+                : "Error";
             markdown += `| ${table.table_name} | ${table.column_count} | ${rowCount} |\n`;
           }
-          
+
           markdown += `\n*${result.rowCount} tables total*`;
 
           return createMarkdownResponse(markdown);
