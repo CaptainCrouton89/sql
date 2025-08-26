@@ -1,7 +1,7 @@
 import { z } from "zod";
 import fs from "fs";
 import path from "path";
-import { createSuccessResponse, createErrorResponse } from "../utils/response.js";
+import { createErrorResponse, createMarkdownResponse } from "../utils/response.js";
 
 export function createUploadFileTool(supabaseUrl: string, serviceKey: string) {
   return {
@@ -130,16 +130,23 @@ export function createUploadFileTool(supabaseUrl: string, serviceKey: string) {
           });
         }
 
-        return createSuccessResponse({
-          success: true,
-          bucketName,
-          filePath,
-          size: buffer.length,
-          contentType: contentType || detectedContentType,
-          uploadedFrom: localFilePath ? 'local-file' : 'base64-content',
-          localFilePath: localFilePath || undefined,
-          ...result,
-        });
+        // Format as markdown
+        let markdown = `### File Uploaded\n\n`;
+        markdown += `| Property | Value |\n`;
+        markdown += `|----------|-------|\n`;
+        markdown += `| Bucket | ${bucketName} |\n`;
+        markdown += `| Path | ${filePath} |\n`;
+        markdown += `| Size | ${buffer.length.toLocaleString()} bytes |\n`;
+        markdown += `| Type | ${contentType || detectedContentType || 'application/octet-stream'} |\n`;
+        markdown += `| Source | ${localFilePath ? `Local file: ${localFilePath}` : 'Base64 content'} |\n`;
+        
+        if (result.Id) {
+          markdown += `| ID | ${result.Id} |\n`;
+        }
+        
+        markdown += `\n*File uploaded successfully*`;
+        
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -180,10 +187,7 @@ export function createDeleteFileTool(supabaseUrl: string, serviceKey: string) {
           });
         }
 
-        return createSuccessResponse({
-          success: true,
-          message: `File deleted: ${bucketName}/${filePath}`,
-        });
+        return createMarkdownResponse(`### File Deleted\n\n✅ Successfully deleted: **${bucketName}/${filePath}**`);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -249,12 +253,28 @@ export function createListFilesTool(supabaseUrl: string, serviceKey: string) {
           });
         }
 
-        return createSuccessResponse({
-          bucketName,
-          path,
-          files: result,
-          count: result.length,
-        });
+        // Format as markdown
+        let markdown = `### Files in ${bucketName}${path ? `/${path}` : ''}\n\n`;
+        
+        if (!result || result.length === 0) {
+          markdown += `*No files found*`;
+        } else {
+          markdown += `| Name | Size | Updated | Type |\n`;
+          markdown += `|------|------|---------|------|\n`;
+          
+          for (const file of result) {
+            const name = file.name || 'Unknown';
+            const size = file.metadata?.size ? `${file.metadata.size.toLocaleString()} bytes` : '-';
+            const updated = file.updated_at ? new Date(file.updated_at).toLocaleDateString() : '-';
+            const type = file.metadata?.mimetype || '-';
+            
+            markdown += `| ${name} | ${size} | ${updated} | ${type} |\n`;
+          }
+          
+          markdown += `\n*${result.length} file(s) found*`;
+        }
+        
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -307,18 +327,28 @@ export function createDownloadFileTool(supabaseUrl: string, serviceKey: string) 
           response.headers.get("content-type") || "application/octet-stream";
         const contentLength = response.headers.get("content-length");
 
-        return createSuccessResponse({
-          success: true,
-          bucketName,
-          filePath,
-          contentType,
-          size: contentLength
-            ? parseInt(contentLength)
-            : buffer.byteLength,
-          content: asBase64
-            ? Buffer.from(buffer).toString("base64")
-            : "[Binary data]",
-        });
+        // Format as markdown
+        let markdown = `### File Downloaded\n\n`;
+        markdown += `| Property | Value |\n`;
+        markdown += `|----------|-------|\n`;
+        markdown += `| Bucket | ${bucketName} |\n`;
+        markdown += `| Path | ${filePath} |\n`;
+        markdown += `| Type | ${contentType} |\n`;
+        markdown += `| Size | ${(contentLength ? parseInt(contentLength) : buffer.byteLength).toLocaleString()} bytes |\n`;
+        
+        if (asBase64) {
+          markdown += `\n#### Content (Base64)\n`;
+          markdown += `\`\`\`\n`;
+          markdown += Buffer.from(buffer).toString("base64").substring(0, 1000);
+          if (Buffer.from(buffer).toString("base64").length > 1000) {
+            markdown += `...\n[Truncated - ${Buffer.from(buffer).toString("base64").length - 1000} more characters]`;
+          }
+          markdown += `\n\`\`\`\n`;
+        } else {
+          markdown += `\n*Binary data downloaded (not displayed)*`;
+        }
+        
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -392,10 +422,22 @@ export function createCreateBucketTool(supabaseUrl: string, serviceKey: string) 
           });
         }
 
-        return createSuccessResponse({
-          success: true,
-          bucket: result,
-        });
+        // Format as markdown
+        let markdown = `### Bucket Created\n\n`;
+        markdown += `✅ Successfully created bucket: **${name}**\n\n`;
+        markdown += `| Property | Value |\n`;
+        markdown += `|----------|-------|\n`;
+        markdown += `| Public | ${isPublic ? 'Yes' : 'No'} |\n`;
+        
+        if (fileSizeLimit) {
+          markdown += `| Max File Size | ${fileSizeLimit.toLocaleString()} bytes |\n`;
+        }
+        
+        if (allowedMimeTypes && allowedMimeTypes.length > 0) {
+          markdown += `| Allowed Types | ${allowedMimeTypes.join(', ')} |\n`;
+        }
+        
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -430,10 +472,7 @@ export function createDeleteBucketTool(supabaseUrl: string, serviceKey: string) 
           });
         }
 
-        return createSuccessResponse({
-          success: true,
-          message: `Bucket deleted: ${bucketName}`,
-        });
+        return createMarkdownResponse(`### Bucket Deleted\n\n✅ Successfully deleted bucket: **${bucketName}**`);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -487,13 +526,9 @@ export function createMoveFileTool(supabaseUrl: string, serviceKey: string) {
           });
         }
 
-        const result = await response.json();
+        await response.json(); // Consume response body
 
-        return createSuccessResponse({
-          success: true,
-          message: `File moved from ${fromBucket}/${fromPath} to ${toBucket}/${toPath}`,
-          ...result,
-        });
+        return createMarkdownResponse(`### File Moved\n\n✅ Successfully moved file:\n- **From**: ${fromBucket}/${fromPath}\n- **To**: ${toBucket}/${toPath}`);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -547,13 +582,9 @@ export function createCopyFileTool(supabaseUrl: string, serviceKey: string) {
           });
         }
 
-        const result = await response.json();
+        await response.json(); // Consume response body
 
-        return createSuccessResponse({
-          success: true,
-          message: `File copied from ${fromBucket}/${fromPath} to ${toBucket}/${toPath}`,
-          ...result,
-        });
+        return createMarkdownResponse(`### File Copied\n\n✅ Successfully copied file:\n- **From**: ${fromBucket}/${fromPath}\n- **To**: ${toBucket}/${toPath}`);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -617,15 +648,17 @@ export function createGenerateSignedUrlTool(supabaseUrl: string, serviceKey: str
 
         const result = await response.json();
 
-        return createSuccessResponse({
-          success: true,
-          bucketName,
-          filePath,
-          operation,
-          expiresIn,
-          signedURL: result.signedURL || result.url,
-          ...result,
-        });
+        // Format as markdown
+        let markdown = `### Signed URL Generated\n\n`;
+        markdown += `| Property | Value |\n`;
+        markdown += `|----------|-------|\n`;
+        markdown += `| Bucket | ${bucketName} |\n`;
+        markdown += `| Path | ${filePath} |\n`;
+        markdown += `| Operation | ${operation} |\n`;
+        markdown += `| Expires In | ${expiresIn} seconds |\n\n`;
+        markdown += `**Signed URL**:\n\`\`\`\n${result.signedURL || result.url}\n\`\`\``;
+        
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -676,12 +709,27 @@ export function createGetFileInfoTool(supabaseUrl: string, serviceKey: string) {
 
         const result = await response.json();
 
-        return createSuccessResponse({
-          success: true,
-          bucketName,
-          filePath,
-          fileInfo: result,
-        });
+        // Format as markdown
+        let markdown = `### File Information\n\n`;
+        markdown += `| Property | Value |\n`;
+        markdown += `|----------|-------|\n`;
+        markdown += `| Bucket | ${bucketName} |\n`;
+        markdown += `| Path | ${filePath} |\n`;
+        
+        if (result.size) {
+          markdown += `| Size | ${result.size.toLocaleString()} bytes |\n`;
+        }
+        if (result.mimetype) {
+          markdown += `| MIME Type | ${result.mimetype} |\n`;
+        }
+        if (result.lastModified) {
+          markdown += `| Last Modified | ${new Date(result.lastModified).toLocaleString()} |\n`;
+        }
+        if (result.etag) {
+          markdown += `| ETag | ${result.etag} |\n`;
+        }
+        
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -733,11 +781,28 @@ export function createListBucketsTool(supabaseUrl: string, serviceKey: string) {
 
         const result = await response.json();
 
-        return createSuccessResponse({
-          success: true,
-          buckets: result,
-          count: result.length,
-        });
+        // Format as markdown
+        let markdown = `### Storage Buckets\n\n`;
+        
+        if (!result || result.length === 0) {
+          markdown += `*No buckets found*`;
+        } else {
+          markdown += `| Name | Public | Created | Updated |\n`;
+          markdown += `|------|--------|---------|---------|\n`;
+          
+          for (const bucket of result) {
+            const name = bucket.name || 'Unknown';
+            const isPublic = bucket.public ? 'Yes' : 'No';
+            const created = bucket.created_at ? new Date(bucket.created_at).toLocaleDateString() : '-';
+            const updated = bucket.updated_at ? new Date(bucket.updated_at).toLocaleDateString() : '-';
+            
+            markdown += `| ${name} | ${isPublic} | ${created} | ${updated} |\n`;
+          }
+          
+          markdown += `\n*${result.length} bucket(s) total*`;
+        }
+        
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createErrorResponse(error);
       }
@@ -772,13 +837,9 @@ export function createEmptyBucketTool(supabaseUrl: string, serviceKey: string) {
           });
         }
 
-        const result = await response.json();
+        await response.json(); // Consume response body
 
-        return createSuccessResponse({
-          success: true,
-          message: `Bucket ${bucketName} has been emptied`,
-          ...result,
-        });
+        return createMarkdownResponse(`### Bucket Emptied\n\n✅ Successfully emptied bucket: **${bucketName}**\n\nAll files have been removed from the bucket.`);
       } catch (error) {
         return createErrorResponse(error);
       }

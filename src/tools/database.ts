@@ -3,7 +3,6 @@ import { executeWithClient } from "../utils/database.js";
 import {
   createErrorResponse,
   createMarkdownResponse,
-  createSuccessResponse,
 } from "../utils/response.js";
 
 export function createExecuteSqlTool(connectionString: string) {
@@ -19,18 +18,64 @@ export function createExecuteSqlTool(connectionString: string) {
         return await executeWithClient(connectionString, async (client) => {
           const result = await client.query(query);
 
-          const response = {
-            rowCount: result.rowCount,
-            rows: result.rows,
-            fields:
-              result.fields?.map((field) => ({
-                name: field.name,
-                dataTypeID: field.dataTypeID,
-              })) || [],
-            command: result.command,
-          };
+          // Get data type names for fields
+          const typeNameQuery = `
+            SELECT oid, typname 
+            FROM pg_type 
+            WHERE oid = ANY($1::oid[])
+          `;
 
-          return createSuccessResponse(response);
+          const typeIds = result.fields?.map((f) => f.dataTypeID) || [];
+          let fieldTypes: Record<number, string> = {};
+
+          if (typeIds.length > 0) {
+            const typeResult = await client.query(typeNameQuery, [typeIds]);
+            fieldTypes = typeResult.rows.reduce((acc, row) => {
+              acc[row.oid] = row.typname;
+              return acc;
+            }, {} as Record<number, string>);
+          }
+
+          // Format as markdown
+          let markdown = `### Query Result\n\n`;
+          markdown += `**Command**: ${result.command || "QUERY"}\n`;
+          markdown += `**Rows affected**: ${result.rowCount || 0}\n\n`;
+
+          if (result.rows && result.rows.length > 0) {
+            // Create table header with field names and types
+            const headers =
+              result.fields?.map((f) => f.name) || Object.keys(result.rows[0]);
+            const types =
+              result.fields?.map(
+                (f) => fieldTypes[f.dataTypeID] || "unknown"
+              ) || [];
+
+            markdown += `| ${headers.join(" | ")} |\n`;
+            markdown += `|${headers.map(() => "---").join("|")}|\n`;
+
+            // Add type row if we have field information
+            if (result.fields && types.length > 0) {
+              markdown += `| ${types.map((t) => `*${t}*`).join(" | ")} |\n`;
+            }
+
+            // Add data rows
+            for (const row of result.rows) {
+              const values = headers.map((h) => {
+                const val = row[h];
+                if (val === null) return "*null*";
+                if (val === "") return "*empty*";
+                if (typeof val === "object") return JSON.stringify(val);
+                return String(val);
+              });
+              markdown += `| ${values.join(" | ")} |\n`;
+            }
+          } else if (result.command) {
+            markdown += `*Query executed successfully*`;
+          } else {
+            markdown += `*No rows returned*`;
+          }
+
+          return createMarkdownResponse(markdown);
         });
       } catch (error) {
         return createErrorResponse(error);
@@ -433,7 +478,7 @@ export function createDescribeTableTool(connectionString: string) {
 
           // Table structure
           markdown += `| Column | Type | Nullable | Default |\n`;
-          markdown += `|--------|------|----------|----------|\n`;
+          markdown += `|---|---|---|---|\n`;
 
           for (const column of enrichedStructure) {
             const nullable = column.is_nullable === "YES" ? "✓" : "";
@@ -617,26 +662,35 @@ export function createDescribeFunctionsTool(connectionString: string) {
 
           const result = await client.query(functionsQuery, [schemaName]);
 
-          const response = {
-            schemaName,
-            functions: result.rows.map((row) => ({
-              name: row.function_name,
-              returnType: row.return_type,
-              arguments: row.arguments,
-              kind:
-                row.function_kind === "f"
-                  ? "function"
-                  : row.function_kind === "p"
-                  ? "procedure"
-                  : row.function_kind === "a"
-                  ? "aggregate"
-                  : "unknown",
-              ...(row.description && { description: row.description }),
-            })),
-            count: result.rowCount,
-          };
+          // Format as markdown
+          let markdown = `## Functions in ${schemaName}\n\n`;
 
-          return createSuccessResponse(response);
+          if (result.rows.length === 0) {
+            markdown += `*No functions found in schema '${schemaName}'*`;
+          } else {
+            markdown += `| Function | Arguments | Returns | Type | Description |\n`;
+            markdown += `|---|---|---|---|---|\n`;
+
+            for (const row of result.rows) {
+              const kind =
+                row.function_kind === "f"
+                  ? "Function"
+                  : row.function_kind === "p"
+                  ? "Procedure"
+                  : row.function_kind === "a"
+                  ? "Aggregate"
+                  : "Unknown";
+              const desc = row.description || "";
+              const args = row.arguments || "";
+              const returns = row.return_type || "";
+
+              markdown += `| ${row.function_name} | ${args} | ${returns} | ${kind} | ${desc} |\n`;
+            }
+
+            markdown += `\n*${result.rowCount} functions total*`;
+          }
+
+          return createMarkdownResponse(markdown);
         });
       } catch (error) {
         return createErrorResponse(error);
@@ -697,7 +751,7 @@ export function createListTablesTool(connectionString: string) {
           // Create markdown format for table list
           let markdown = `## Tables in ${schemaName}\n\n`;
           markdown += `| Table | Columns | Rows |\n`;
-          markdown += `|-------|---------|------|\n`;
+          markdown += `|---|---|---|\n`;
 
           for (const table of tablesWithRowCounts) {
             const rowCount =
@@ -778,30 +832,46 @@ export function createGetFunctionDefinitionTool(connectionString: string) {
           }
 
           const func = result.rows[0];
-          const response = {
-            schemaName,
-            functionName: func.function_name,
-            returnType: func.return_type,
-            arguments: func.arguments,
-            definition: func.definition,
-            sourceCode: func.source_code,
-            language: func.language,
-            kind:
-              func.function_kind === "f"
-                ? "function"
-                : func.function_kind === "p"
-                ? "procedure"
-                : func.function_kind === "a"
-                ? "aggregate"
-                : "unknown",
-            volatility: func.volatility_label,
-            securityDefiner: func.security_definer,
-            isStrict: func.is_strict,
-            returnsSet: func.returns_set,
-            ...(func.description && { description: func.description }),
-          };
 
-          return createSuccessResponse(response);
+          // Format as markdown
+          let markdown = `## Function: ${func.function_name}\n\n`;
+
+          if (func.description) {
+            markdown += `**Description**: ${func.description}\n\n`;
+          }
+
+          markdown += `### Signature\n`;
+          markdown += `\`\`\`sql\n`;
+          markdown += `${func.function_name}(${func.arguments || ""})\n`;
+          markdown += `RETURNS ${func.return_type}\n`;
+          markdown += `\`\`\`\n\n`;
+
+          markdown += `### Properties\n`;
+          markdown += `- **Language**: ${func.language}\n`;
+          markdown += `- **Type**: ${
+            func.function_kind === "f"
+              ? "Function"
+              : func.function_kind === "p"
+              ? "Procedure"
+              : func.function_kind === "a"
+              ? "Aggregate"
+              : "Unknown"
+          }\n`;
+          markdown += `- **Volatility**: ${func.volatility_label}\n`;
+          markdown += `- **Security Definer**: ${
+            func.security_definer ? "Yes" : "No"
+          }\n`;
+          markdown += `- **Strict**: ${func.is_strict ? "Yes" : "No"}\n`;
+          markdown += `- **Returns Set**: ${
+            func.returns_set ? "Yes" : "No"
+          }\n\n`;
+
+          markdown += `### Definition\n`;
+          markdown += `\`\`\`sql\n`;
+          markdown += func.definition;
+          markdown += `\n\`\`\`\n`;
+
+          return createMarkdownResponse(markdown);
         });
       } catch (error) {
         return createErrorResponse(error);
