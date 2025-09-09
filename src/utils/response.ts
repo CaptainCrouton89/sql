@@ -61,3 +61,16 @@ export function createErrorResponse(error: unknown) {
     ],
   };
 }
+
+export function createGuidedErrorResponse(error: unknown, guidance?: string) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  
+  let markdown = `## ❌ Query Error\n\n`;
+  markdown += `**Error**: ${errorMessage}\n\n`;
+  
+  if (guidance) {
+    markdown += guidance;
+  }
+  
+  return createMarkdownResponse(markdown);
+}

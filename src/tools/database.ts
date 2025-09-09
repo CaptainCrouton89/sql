@@ -2,8 +2,160 @@ import { z } from "zod";
 import { executeWithClient } from "../utils/database.js";
 import {
   createErrorResponse,
+  createGuidedErrorResponse,
   createMarkdownResponse,
 } from "../utils/response.js";
+
+async function getTableStructure(client: any, tableName: string) {
+  try {
+    const structureQuery = `
+      SELECT 
+        c.column_name,
+        c.data_type,
+        c.is_nullable,
+        c.column_default,
+        c.character_maximum_length,
+        c.numeric_precision,
+        c.numeric_scale
+      FROM information_schema.columns c
+      WHERE c.table_name = $1 
+      ORDER BY c.ordinal_position;
+    `;
+
+    const result = await client.query(structureQuery, [tableName]);
+    return result.rows;
+  } catch {
+    return null;
+  }
+}
+
+async function extractTableFromError(
+  error: string,
+  query: string
+): Promise<string | null> {
+  // Try to extract table name from various error patterns
+  const patterns = [
+    /relation "([^"]+)" does not exist/i,
+    /column "[^"]+" of relation "([^"]+)"/i,
+    /table "([^"]+)"/i,
+    /from ([\w_]+)/i,
+    /update ([\w_]+)/i,
+    /insert into ([\w_]+)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = error.match(pattern) || query.match(pattern);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+async function createEnhancedErrorResponse(
+  error: unknown,
+  query: string,
+  connectionString: string
+) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+
+  // Check for common SQL errors that could benefit from guidance
+  const columnError = errorMessage.match(/column "([^"]+)" does not exist/i);
+  const relationError = errorMessage.match(
+    /relation "([^"]+)" does not exist/i
+  );
+  const columnOfRelationError = errorMessage.match(
+    /column "([^"]+)" of relation "([^"]+)"/i
+  );
+
+  if (columnError || relationError || columnOfRelationError) {
+    return await executeWithClient(connectionString, async (client) => {
+      let guidance = "";
+      const tableName = await extractTableFromError(errorMessage, query);
+
+      if (tableName) {
+        const structure = await getTableStructure(client, tableName);
+
+        if (structure && structure.length > 0) {
+          guidance += `### Table Structure for '${tableName}'\n\n`;
+          guidance += `| Column | Type | Nullable | Default |\n`;
+          guidance += `|---|---|---|---|\n`;
+
+          for (const column of structure) {
+            const nullable = column.is_nullable === "YES" ? "✓" : "";
+            const defaultVal = column.column_default || "";
+            const precision = column.numeric_precision
+              ? `(${column.numeric_precision}${
+                  column.numeric_scale ? `,${column.numeric_scale}` : ""
+                })`
+              : "";
+            const length = column.character_maximum_length
+              ? `(${column.character_maximum_length})`
+              : "";
+            const type = `${column.data_type}${precision}${length}`;
+
+            guidance += `| ${column.column_name} | ${type} | ${nullable} | ${defaultVal} |\n`;
+          }
+
+          if (columnError) {
+            const missingColumn = columnError[1];
+            guidance += `\n**The column '${missingColumn}' does not exist**\n`;
+          }
+        } else if (relationError) {
+          // Table doesn't exist, let's list available tables
+          try {
+            const tablesQuery = `
+              SELECT table_name 
+              FROM information_schema.tables 
+              WHERE table_schema = 'public' 
+              AND table_type = 'BASE TABLE'
+              ORDER BY table_name;
+            `;
+            const tablesResult = await client.query(tablesQuery);
+
+            if (tablesResult.rows.length > 0) {
+              guidance += `### Available Tables\n\n`;
+              guidance += tablesResult.rows
+                .map((t: any) => `- ${t.table_name}`)
+                .join("\n");
+              guidance += `\n\n**The table '${tableName}' does not exist**\n`;
+            }
+          } catch {}
+        }
+      }
+
+      if (!guidance) {
+        // Provide general SQL error guidance
+        guidance += `### Common Issues\n\n`;
+        guidance += `- **Column doesn't exist**: Check column names using \`describe-table\`\n`;
+        guidance += `- **Table doesn't exist**: List available tables using \`list-tables\`\n`;
+        guidance += `- **Syntax error**: Review SQL syntax and quotes\n`;
+        guidance += `- **Permission denied**: Check database permissions\n\n`;
+        guidance += `### Next Steps\n\n`;
+        guidance += `1. Use \`list-tables\` to see available tables\n`;
+        guidance += `2. Use \`describe-table\` to see table structure\n`;
+        guidance += `3. Verify column and table names match exactly (case-sensitive)\n`;
+      }
+
+      return createGuidedErrorResponse(error, guidance);
+    });
+  }
+
+  // For other errors, provide general guidance
+  let guidance = `### Query Analysis\n\n`;
+  guidance += `**Query**: \`${query}\`\n\n`;
+  guidance += `### Debugging Steps\n\n`;
+  guidance += `1. Check syntax - Ensure SQL syntax is correct\n`;
+  guidance += `2. Verify permissions - Ensure you have access to the requested resources\n`;
+  guidance += `3. Review data types - Ensure values match column data types\n\n`;
+  guidance += `### Helpful Commands\n\n`;
+  guidance += `- \`list-tables\` - See all available tables\n`;
+  guidance += `- \`describe-table\` - Get detailed table structure\n`;
+  guidance += `- \`describe-functions\` - List available database functions\n`;
+
+  return createGuidedErrorResponse(error, guidance);
+}
 
 export function createExecuteSqlTool(connectionString: string) {
   return {
@@ -78,7 +230,7 @@ export function createExecuteSqlTool(connectionString: string) {
           return createMarkdownResponse(markdown);
         });
       } catch (error) {
-        return createErrorResponse(error);
+        return createEnhancedErrorResponse(error, query, connectionString);
       }
     },
   };
@@ -627,7 +779,13 @@ export function createDescribeTableTool(connectionString: string) {
           return createMarkdownResponse(markdown);
         });
       } catch (error) {
-        return createErrorResponse(error);
+        return createGuidedErrorResponse(
+          error,
+          `### Troubleshooting\n\n` +
+            `- Check that the table name is spelled correctly\n` +
+            `- Use \`list-tables\` to see available tables\n` +
+            `- Verify you have permissions to access this table\n`
+        );
       }
     },
   };
@@ -693,7 +851,13 @@ export function createDescribeFunctionsTool(connectionString: string) {
           return createMarkdownResponse(markdown);
         });
       } catch (error) {
-        return createErrorResponse(error);
+        return createGuidedErrorResponse(
+          error,
+          `### Troubleshooting\n\n` +
+            `- Check that the table name is spelled correctly\n` +
+            `- Use \`list-tables\` to see available tables\n` +
+            `- Verify you have permissions to access this table\n`
+        );
       }
     },
   };
@@ -766,7 +930,13 @@ export function createListTablesTool(connectionString: string) {
           return createMarkdownResponse(markdown);
         });
       } catch (error) {
-        return createErrorResponse(error);
+        return createGuidedErrorResponse(
+          error,
+          `### Troubleshooting\n\n` +
+            `- Check that the table name is spelled correctly\n` +
+            `- Use \`list-tables\` to see available tables\n` +
+            `- Verify you have permissions to access this table\n`
+        );
       }
     },
   };
@@ -874,7 +1044,13 @@ export function createGetFunctionDefinitionTool(connectionString: string) {
           return createMarkdownResponse(markdown);
         });
       } catch (error) {
-        return createErrorResponse(error);
+        return createGuidedErrorResponse(
+          error,
+          `### Troubleshooting\n\n` +
+            `- Check that the table name is spelled correctly\n` +
+            `- Use \`list-tables\` to see available tables\n` +
+            `- Verify you have permissions to access this table\n`
+        );
       }
     },
   };
