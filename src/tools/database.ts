@@ -1,6 +1,6 @@
+import { Client } from "pg";
 import { z } from "zod";
 import { DatabaseClient } from "../utils/database-client.js";
-import { Client } from "pg";
 import {
   createErrorResponse,
   createGuidedErrorResponse,
@@ -71,12 +71,13 @@ async function createEnhancedErrorResponse(
   );
 
   if (columnError || relationError || columnOfRelationError) {
-    return await dbClient.executeWithClient(async (client) => {
-      let guidance = "";
-      const tableName = await extractTableFromError(errorMessage, query);
+    try {
+      return await dbClient.executeWithClient(async (client) => {
+        let guidance = "";
+        const tableName = await extractTableFromError(errorMessage, query);
 
-      if (tableName) {
-        const structure = await getTableStructure(client, tableName);
+        if (tableName) {
+          const structure = await getTableStructure(client, tableName);
 
         if (structure && structure.length > 0) {
           guidance += `### Table Structure for '${tableName}'\n\n`;
@@ -139,8 +140,11 @@ async function createEnhancedErrorResponse(
         guidance += `3. Verify column and table names match exactly (case-sensitive)\n`;
       }
 
-      return createGuidedErrorResponse(error, guidance);
-    });
+        return createGuidedErrorResponse(error, guidance);
+      });
+    } catch {
+      // If executeWithClient fails (management-api mode), fall through to basic error
+    }
   }
 
   // For other errors, provide general guidance
@@ -277,23 +281,22 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
       includeSampleRows?: boolean;
     }) => {
       try {
-        return await dbClient.executeWithClient(async (client) => {
-          const structureQuery = `
-            SELECT 
-              c.column_name,
-              c.data_type,
-              c.is_nullable,
-              c.column_default,
-              c.character_maximum_length,
-              c.numeric_precision,
-              c.numeric_scale,
-              c.ordinal_position
-            FROM information_schema.columns c
-            WHERE c.table_name = $1 
-            ORDER BY c.ordinal_position;
-          `;
+        const structureQuery = `
+          SELECT
+            c.column_name,
+            c.data_type,
+            c.is_nullable,
+            c.column_default,
+            c.character_maximum_length,
+            c.numeric_precision,
+            c.numeric_scale,
+            c.ordinal_position
+          FROM information_schema.columns c
+          WHERE c.table_name = $1
+          ORDER BY c.ordinal_position;
+        `;
 
-          const constraintsQuery = `
+        const constraintsQuery = `
             SELECT 
               tc.constraint_name,
               tc.constraint_type,
@@ -420,48 +423,48 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
             ORDER BY tc.table_name, kcu.column_name;
           `;
 
-          const queries = [client.query(structureQuery, [tableName])];
+        const queries = [dbClient.query(structureQuery, [tableName])];
 
-          if (includeConstraints) {
-            queries.push(client.query(constraintsQuery, [tableName]));
-          }
+        if (includeConstraints) {
+          queries.push(dbClient.query(constraintsQuery, [tableName]));
+        }
 
-          if (includeSampleRows) {
-            queries.push(client.query(sampleQuery));
-          }
+        if (includeSampleRows) {
+          queries.push(dbClient.query(sampleQuery));
+        }
 
-          if (includeRlsPolicies) {
-            queries.push(client.query(rlsPoliciesQuery, [tableName]));
-          }
+        if (includeRlsPolicies) {
+          queries.push(dbClient.query(rlsPoliciesQuery, [tableName]));
+        }
 
-          if (includeTriggers) {
-            queries.push(client.query(triggersQuery, [tableName]));
-          }
+        if (includeTriggers) {
+          queries.push(dbClient.query(triggersQuery, [tableName]));
+        }
 
-          if (includeIndexes) {
-            queries.push(client.query(indexesQuery, [tableName]));
-          }
+        if (includeIndexes) {
+          queries.push(dbClient.query(indexesQuery, [tableName]));
+        }
 
-          if (includeDependencies) {
-            queries.push(client.query(dependenciesQuery, [tableName]));
-          }
+        if (includeDependencies) {
+          queries.push(dbClient.query(dependenciesQuery, [tableName]));
+        }
 
-          if (includeReferencedBy) {
-            queries.push(client.query(referencedByQuery, [tableName]));
-          }
+        if (includeReferencedBy) {
+          queries.push(dbClient.query(referencedByQuery, [tableName]));
+        }
 
-          const results = await Promise.all(queries);
-          const structureResult = results[0];
+        const results = await Promise.all(queries);
+        const structureResult = results[0] as any;
 
-          let constraintsResult = null;
-          let sampleResult = null;
-          let rlsPoliciesResult = null;
-          let triggersResult = null;
-          let indexesResult = null;
-          let dependenciesResult = null;
-          let referencedByResult = null;
+        let constraintsResult: any = null;
+        let sampleResult: any = null;
+        let rlsPoliciesResult: any = null;
+        let triggersResult: any = null;
+        let indexesResult: any = null;
+        let dependenciesResult: any = null;
+        let referencedByResult: any = null;
 
-          let queryIndex = 1;
+        let queryIndex = 1;
 
           if (includeConstraints) {
             constraintsResult = results[queryIndex++];
@@ -492,7 +495,7 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
           }
 
           const constraintsByColumn = constraintsResult
-            ? constraintsResult.rows.reduce((acc, constraint) => {
+            ? constraintsResult.rows.reduce((acc: any, constraint: any) => {
                 if (constraint.column_name) {
                   if (!acc[constraint.column_name]) {
                     acc[constraint.column_name] = [];
@@ -511,7 +514,7 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
               }, {} as Record<string, any[]>)
             : {};
 
-          const enrichedStructure = structureResult.rows.map((column) => ({
+          const enrichedStructure = structureResult.rows.map((column: any) => ({
             ...column,
             ...(includeConstraints && {
               constraints: constraintsByColumn[column.column_name] || [],
@@ -525,7 +528,7 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
 
           if (includeConstraints && constraintsResult) {
             response.constraints = constraintsResult.rows.filter(
-              (constraint) =>
+              (constraint: any) =>
                 constraint.constraint_name && constraint.constraint_type
             );
           }
@@ -537,8 +540,8 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
 
           if (includeRlsPolicies && rlsPoliciesResult) {
             response.rlsPolicies = rlsPoliciesResult.rows
-              .filter((policy) => policy.policy_name)
-              .map((policy) => ({
+              .filter((policy: any) => policy.policy_name)
+              .map((policy: any) => ({
                 policyName: policy.policy_name,
                 isPermissive: policy.is_permissive,
                 roles: policy.roles,
@@ -554,8 +557,8 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
 
           if (includeTriggers && triggersResult) {
             response.triggers = triggersResult.rows
-              .filter((trigger) => trigger.trigger_name)
-              .map((trigger) => ({
+              .filter((trigger: any) => trigger.trigger_name)
+              .map((trigger: any) => ({
                 triggerName: trigger.trigger_name,
                 event: trigger.event,
                 tableName: trigger.table_name,
@@ -567,7 +570,7 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
           }
 
           if (includeIndexes && indexesResult) {
-            response.indexes = indexesResult.rows.map((index) => ({
+            response.indexes = indexesResult.rows.map((index: any) => ({
               indexName: index.index_name,
               tableName: index.table_name,
               definition: index.definition,
@@ -583,7 +586,7 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
           }
 
           if (includeDependencies && dependenciesResult) {
-            response.dependencies = dependenciesResult.rows.map((dep) => ({
+            response.dependencies = dependenciesResult.rows.map((dep: any) => ({
               objectType: dep.object_type,
               objectName: dep.object_name,
               objectSubid: dep.object_subid,
@@ -596,7 +599,7 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
           }
 
           if (includeReferencedBy && referencedByResult) {
-            response.referencedBy = referencedByResult.rows.map((ref) => ({
+            response.referencedBy = referencedByResult.rows.map((ref: any) => ({
               referencingTable: ref.referencing_table,
               referencingColumn: ref.referencing_column,
               referencedTable: ref.referenced_table,
@@ -648,11 +651,11 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
             constraintsResult.rows.length > 0
           ) {
             const tableConstraints = constraintsResult.rows.filter(
-              (c) => !c.column_name
+              (c: any) => !c.column_name
             );
             if (tableConstraints.length > 0) {
               markdown += `\n### Constraints\n`;
-              for (const constraint of tableConstraints) {
+              for (const constraint of (tableConstraints as any[])) {
                 markdown += `- **${constraint.constraint_name}** (${constraint.constraint_type})`;
                 if (constraint.check_clause) {
                   markdown += `: ${constraint.check_clause}`;
@@ -692,7 +695,7 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
           ) {
             markdown += `\n### RLS Policies\n`;
             for (const policy of rlsPoliciesResult.rows.filter(
-              (p) => p.policy_name
+              (p: any) => p.policy_name
             )) {
               markdown += `- **${policy.policy_name}** (${policy.command})\n`;
               if (policy.using_expression) {
@@ -712,7 +715,7 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
           ) {
             markdown += `\n### Triggers\n`;
             for (const trigger of triggersResult.rows.filter(
-              (t) => t.trigger_name
+              (t: any) => t.trigger_name
             )) {
               markdown += `- **${trigger.trigger_name}** (${trigger.timing} ${trigger.event})\n`;
             }
@@ -758,9 +761,8 @@ export function createDescribeTableTool(dbClient: DatabaseClient) {
             }
           }
 
-          return createMarkdownResponse(markdown);
-        });
-      } catch (error) {
+        return createMarkdownResponse(markdown);
+      } catch (error: unknown) {
         return createGuidedErrorResponse(
           error,
           `### Troubleshooting\n\n` +
@@ -785,53 +787,61 @@ export function createDescribeFunctionsTool(dbClient: DatabaseClient) {
     },
     handler: async ({ schemaName = "public" }: { schemaName?: string }) => {
       try {
-        return await dbClient.executeWithClient(async (client) => {
-          const functionsQuery = `
-            SELECT 
-              p.proname as function_name,
-              pg_catalog.pg_get_function_result(p.oid) as return_type,
-              pg_catalog.pg_get_function_arguments(p.oid) as arguments,
-              p.prokind as function_kind,
-              d.description
-            FROM pg_catalog.pg_proc p
-            LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-            LEFT JOIN pg_catalog.pg_description d ON d.objoid = p.oid
-            WHERE n.nspname = $1
-            ORDER BY p.proname;
-          `;
+        const functionsQuery = `
+          SELECT
+            p.proname as function_name,
+            pg_catalog.pg_get_function_result(p.oid) as return_type,
+            pg_catalog.pg_get_function_arguments(p.oid) as arguments,
+            p.prokind as function_kind,
+            d.description
+          FROM pg_catalog.pg_proc p
+          LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+          LEFT JOIN pg_catalog.pg_description d ON d.objoid = p.oid
+          WHERE n.nspname = $1
+          ORDER BY p.proname;
+        `;
 
-          const result = await client.query(functionsQuery, [schemaName]);
+        interface FunctionRow {
+          function_name: string;
+          return_type: string;
+          arguments: string;
+          function_kind: string;
+          description: string | null;
+        }
 
-          // Format as markdown
-          let markdown = `## Functions in ${schemaName}\n\n`;
+        const result = await dbClient.query<FunctionRow>(functionsQuery, [schemaName]);
 
-          if (result.rows.length === 0) {
-            markdown += `*No functions found in schema '${schemaName}'*`;
-          } else {
-            markdown += `| Function | Arguments | Returns | Type | Description |\n`;
-            markdown += `|---|---|---|---|---|\n`;
+        // Format as markdown
+        let markdown = `## Functions in ${schemaName}\n\n`;
 
-            for (const row of result.rows) {
-              const kind =
-                row.function_kind === "f"
-                  ? "Function"
-                  : row.function_kind === "p"
-                  ? "Procedure"
-                  : row.function_kind === "a"
-                  ? "Aggregate"
-                  : "Unknown";
-              const desc = row.description || "";
-              const args = row.arguments || "";
-              const returns = row.return_type || "";
+        if (result.rows.length === 0) {
+          markdown += `*No functions found in schema '${schemaName}'*`;
+        } else {
+          markdown += `| Function | Arguments | Returns | Type | Description |\n`;
+          markdown += `|---|---|---|---|---|\n`;
 
-              markdown += `| ${row.function_name} | ${args} | ${returns} | ${kind} | ${desc} |\n`;
-            }
+          for (const row of result.rows) {
+            const kind =
+              row.function_kind === "f"
+                ? "Function"
+                : row.function_kind === "p"
+                ? "Procedure"
+                : row.function_kind === "a"
+                ? "Aggregate"
+                : "Unknown";
+            const desc = row.description !== null ? row.description : "";
+            const args = row.arguments || "";
+            const returns = row.return_type || "";
 
-            markdown += `\n*${result.rowCount} functions total*`;
+            markdown += `| ${row.function_name} | ${args} | ${returns} | ${kind} | ${desc} |\n`;
           }
 
-          return createMarkdownResponse(markdown);
-        });
+          if (result.rowCount !== null && result.rowCount !== undefined) {
+            markdown += `\n*${result.rowCount} functions total*`;
+          }
+        }
+
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createGuidedErrorResponse(
           error,
@@ -857,60 +867,75 @@ export function createListTablesTool(dbClient: DatabaseClient) {
     },
     handler: async ({ schemaName = "public" }: { schemaName?: string }) => {
       try {
-        return await dbClient.executeWithClient(async (client) => {
-          const tablesQuery = `
-            SELECT 
-              t.table_name,
-              t.table_type,
-              obj_description(c.oid) as table_comment,
-              (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = t.table_name AND table_schema = $1) as column_count
-            FROM information_schema.tables t
-            LEFT JOIN pg_class c ON c.relname = t.table_name
-            LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE t.table_schema = $1
-            AND t.table_type = 'BASE TABLE'
-            ORDER BY t.table_name;
-          `;
+        const tablesQuery = `
+          SELECT
+            t.table_name,
+            t.table_type,
+            obj_description(c.oid) as table_comment,
+            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = t.table_name AND table_schema = $1) as column_count
+          FROM information_schema.tables t
+          LEFT JOIN pg_class c ON c.relname = t.table_name
+          LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE t.table_schema = $1
+          AND t.table_type = 'BASE TABLE'
+          ORDER BY t.table_name;
+        `;
 
-          const result = await client.query(tablesQuery, [schemaName]);
+        const result = await dbClient.query(tablesQuery, [schemaName]);
 
-          const tablesWithRowCounts = await Promise.all(
-            result.rows.map(async (table) => {
-              try {
-                const countResult = await client.query(
-                  `SELECT COUNT(*) as row_count FROM "${table.table_name}"`
-                );
-                return {
-                  ...table,
-                  row_count: parseInt(countResult.rows[0].row_count),
-                };
-              } catch (error) {
-                return {
-                  ...table,
-                  row_count: null,
-                  error: "Could not get row count",
-                };
+        interface TableRow {
+          table_name: string;
+          table_type: string;
+          table_comment: string | null;
+          column_count: number;
+        }
+
+        interface TableWithRowCount extends TableRow {
+          row_count: number | null;
+          error?: string;
+        }
+
+        const tablesWithRowCounts = await Promise.all(
+          result.rows.map(async (table): Promise<TableWithRowCount> => {
+            const typedTable = table as TableRow;
+            try {
+              const countResult = await dbClient.query<{ row_count: string }>(
+                `SELECT COUNT(*) as row_count FROM "${typedTable.table_name}"`
+              );
+              const firstRow = countResult.rows[0];
+              if (!firstRow) {
+                throw new Error('No row count returned');
               }
-            })
-          );
+              return {
+                ...typedTable,
+                row_count: parseInt(firstRow.row_count),
+              };
+            } catch (error) {
+              return {
+                ...typedTable,
+                row_count: null,
+                error: "Could not get row count",
+              };
+            }
+          })
+        );
 
-          // Create markdown format for table list
-          let markdown = `## Tables in ${schemaName}\n\n`;
-          markdown += `| Table | Columns | Rows |\n`;
-          markdown += `|---|---|---|\n`;
+        // Create markdown format for table list
+        let markdown = `## Tables in ${schemaName}\n\n`;
+        markdown += `| Table | Columns | Rows |\n`;
+        markdown += `|---|---|---|\n`;
 
-          for (const table of tablesWithRowCounts) {
-            const rowCount =
-              table.row_count !== null
-                ? table.row_count.toLocaleString()
-                : "Error";
-            markdown += `| ${table.table_name} | ${table.column_count} | ${rowCount} |\n`;
-          }
+        for (const table of tablesWithRowCounts) {
+          const rowCount =
+            table.row_count !== null
+              ? table.row_count.toLocaleString()
+              : "Error";
+          markdown += `| ${table.table_name} | ${table.column_count} | ${rowCount} |\n`;
+        }
 
-          markdown += `\n*${result.rowCount} tables total*`;
+        markdown += `\n*${result.rowCount} tables total*`;
 
-          return createMarkdownResponse(markdown);
-        });
+        return createMarkdownResponse(markdown);
       } catch (error) {
         return createGuidedErrorResponse(
           error,
@@ -945,87 +970,85 @@ export function createGetFunctionDefinitionTool(dbClient: DatabaseClient) {
       schemaName?: string;
     }) => {
       try {
-        return await dbClient.executeWithClient(async (client) => {
-          const functionQuery = `
-            SELECT 
-              p.proname as function_name,
-              pg_catalog.pg_get_function_result(p.oid) as return_type,
-              pg_catalog.pg_get_function_arguments(p.oid) as arguments,
-              pg_catalog.pg_get_functiondef(p.oid) as definition,
-              p.prokind as function_kind,
-              p.provolatile as volatility,
-              p.prosecdef as security_definer,
-              p.proisstrict as is_strict,
-              p.proretset as returns_set,
-              l.lanname as language,
-              d.description,
-              p.prosrc as source_code,
-              CASE p.provolatile
-                WHEN 'i' THEN 'IMMUTABLE'
-                WHEN 's' THEN 'STABLE'
-                WHEN 'v' THEN 'VOLATILE'
-              END as volatility_label
-            FROM pg_catalog.pg_proc p
-            LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-            LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
-            LEFT JOIN pg_catalog.pg_description d ON d.objoid = p.oid
-            WHERE n.nspname = $1 AND p.proname = $2;
-          `;
+        const functionQuery = `
+          SELECT
+            p.proname as function_name,
+            pg_catalog.pg_get_function_result(p.oid) as return_type,
+            pg_catalog.pg_get_function_arguments(p.oid) as arguments,
+            pg_catalog.pg_get_functiondef(p.oid) as definition,
+            p.prokind as function_kind,
+            p.provolatile as volatility,
+            p.prosecdef as security_definer,
+            p.proisstrict as is_strict,
+            p.proretset as returns_set,
+            l.lanname as language,
+            d.description,
+            p.prosrc as source_code,
+            CASE p.provolatile
+              WHEN 'i' THEN 'IMMUTABLE'
+              WHEN 's' THEN 'STABLE'
+              WHEN 'v' THEN 'VOLATILE'
+            END as volatility_label
+          FROM pg_catalog.pg_proc p
+          LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+          LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+          LEFT JOIN pg_catalog.pg_description d ON d.objoid = p.oid
+          WHERE n.nspname = $1 AND p.proname = $2;
+        `;
 
-          const result = await client.query(functionQuery, [
-            schemaName,
-            functionName,
-          ]);
+        const result = await dbClient.query(functionQuery, [
+          schemaName,
+          functionName,
+        ]);
 
-          if (result.rowCount === 0) {
-            return createErrorResponse(
-              `Function '${functionName}' not found in schema '${schemaName}'`
-            );
-          }
+        if (result.rowCount === 0) {
+          return createErrorResponse(
+            `Function '${functionName}' not found in schema '${schemaName}'`
+          );
+        }
 
-          const func = result.rows[0];
+        const func = result.rows[0] as any;
 
-          // Format as markdown
-          let markdown = `## Function: ${func.function_name}\n\n`;
+        // Format as markdown
+        let markdown = `## Function: ${func.function_name}\n\n`;
 
-          if (func.description) {
-            markdown += `**Description**: ${func.description}\n\n`;
-          }
+        if (func.description) {
+          markdown += `**Description**: ${func.description}\n\n`;
+        }
 
-          markdown += `### Signature\n`;
-          markdown += `\`\`\`sql\n`;
-          markdown += `${func.function_name}(${func.arguments || ""})\n`;
-          markdown += `RETURNS ${func.return_type}\n`;
-          markdown += `\`\`\`\n\n`;
+        markdown += `### Signature\n`;
+        markdown += `\`\`\`sql\n`;
+        markdown += `${func.function_name}(${func.arguments || ""})\n`;
+        markdown += `RETURNS ${func.return_type}\n`;
+        markdown += `\`\`\`\n\n`;
 
-          markdown += `### Properties\n`;
-          markdown += `- **Language**: ${func.language}\n`;
-          markdown += `- **Type**: ${
-            func.function_kind === "f"
-              ? "Function"
-              : func.function_kind === "p"
-              ? "Procedure"
-              : func.function_kind === "a"
-              ? "Aggregate"
-              : "Unknown"
-          }\n`;
-          markdown += `- **Volatility**: ${func.volatility_label}\n`;
-          markdown += `- **Security Definer**: ${
-            func.security_definer ? "Yes" : "No"
-          }\n`;
-          markdown += `- **Strict**: ${func.is_strict ? "Yes" : "No"}\n`;
-          markdown += `- **Returns Set**: ${
-            func.returns_set ? "Yes" : "No"
-          }\n\n`;
+        markdown += `### Properties\n`;
+        markdown += `- **Language**: ${func.language}\n`;
+        markdown += `- **Type**: ${
+          func.function_kind === "f"
+            ? "Function"
+            : func.function_kind === "p"
+            ? "Procedure"
+            : func.function_kind === "a"
+            ? "Aggregate"
+            : "Unknown"
+        }\n`;
+        markdown += `- **Volatility**: ${func.volatility_label}\n`;
+        markdown += `- **Security Definer**: ${
+          func.security_definer ? "Yes" : "No"
+        }\n`;
+        markdown += `- **Strict**: ${func.is_strict ? "Yes" : "No"}\n`;
+        markdown += `- **Returns Set**: ${
+          func.returns_set ? "Yes" : "No"
+        }\n\n`;
 
-          markdown += `### Definition\n`;
-          markdown += `\`\`\`sql\n`;
-          markdown += func.definition;
-          markdown += `\n\`\`\`\n`;
+        markdown += `### Definition\n`;
+        markdown += `\`\`\`sql\n`;
+        markdown += func.definition;
+        markdown += `\n\`\`\`\n`;
 
-          return createMarkdownResponse(markdown);
-        });
-      } catch (error) {
+        return createMarkdownResponse(markdown);
+      } catch (error: unknown) {
         return createGuidedErrorResponse(
           error,
           `### Troubleshooting\n\n` +
