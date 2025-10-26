@@ -1,12 +1,13 @@
 import { z } from "zod";
-import { executeWithClient } from "../utils/database.js";
+import { DatabaseClient } from "../utils/database-client.js";
+import { Client } from "pg";
 import {
   createErrorResponse,
   createGuidedErrorResponse,
   createMarkdownResponse,
 } from "../utils/response.js";
 
-async function getTableStructure(client: any, tableName: string) {
+async function getTableStructure(client: Client, tableName: string) {
   try {
     const structureQuery = `
       SELECT 
@@ -56,7 +57,7 @@ async function extractTableFromError(
 async function createEnhancedErrorResponse(
   error: unknown,
   query: string,
-  connectionString: string
+  dbClient: DatabaseClient
 ) {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
@@ -70,7 +71,7 @@ async function createEnhancedErrorResponse(
   );
 
   if (columnError || relationError || columnOfRelationError) {
-    return await executeWithClient(connectionString, async (client) => {
+    return await dbClient.executeWithClient(async (client) => {
       let guidance = "";
       const tableName = await extractTableFromError(errorMessage, query);
 
@@ -157,7 +158,7 @@ async function createEnhancedErrorResponse(
   return createGuidedErrorResponse(error, guidance);
 }
 
-export function createExecuteSqlTool(connectionString: string) {
+export function createExecuteSqlTool(dbClient: DatabaseClient) {
   return {
     name: "execute-sql",
     description:
@@ -167,76 +168,57 @@ export function createExecuteSqlTool(connectionString: string) {
     },
     handler: async ({ query }: { query: string }) => {
       try {
-        return await executeWithClient(connectionString, async (client) => {
-          const result = await client.query(query);
+        const result = await dbClient.query(query);
 
-          // Get data type names for fields
-          const typeNameQuery = `
-            SELECT oid, typname 
-            FROM pg_type 
-            WHERE oid = ANY($1::oid[])
-          `;
+        // For Management API mode, we don't have field types, so format differently
+        let markdown = `### Query Result\n\n`;
 
-          const typeIds = result.fields?.map((f) => f.dataTypeID) || [];
-          let fieldTypes: Record<number, string> = {};
+        if (result.command) {
+          markdown += `**Command**: ${result.command}\n`;
+        }
 
-          if (typeIds.length > 0) {
-            const typeResult = await client.query(typeNameQuery, [typeIds]);
-            fieldTypes = typeResult.rows.reduce((acc, row) => {
-              acc[row.oid] = row.typname;
-              return acc;
-            }, {} as Record<number, string>);
+        if (result.rowCount !== null && result.rowCount !== undefined) {
+          markdown += `**Rows affected**: ${result.rowCount}\n`;
+        }
+
+        markdown += `\n`;
+
+        if (result.rows && result.rows.length > 0) {
+          const firstRow = result.rows[0];
+          if (typeof firstRow !== 'object' || firstRow === null) {
+            throw new Error('Unexpected row format');
           }
+          const headers = Object.keys(firstRow);
 
-          // Format as markdown
-          let markdown = `### Query Result\n\n`;
-          markdown += `**Command**: ${result.command || "QUERY"}\n`;
-          markdown += `**Rows affected**: ${result.rowCount || 0}\n\n`;
+          markdown += `| ${headers.join(" | ")} |\n`;
+          markdown += `|${headers.map(() => "---").join("|")}|\n`;
 
-          if (result.rows && result.rows.length > 0) {
-            // Create table header with field names and types
-            const headers =
-              result.fields?.map((f) => f.name) || Object.keys(result.rows[0]);
-            const types =
-              result.fields?.map(
-                (f) => fieldTypes[f.dataTypeID] || "unknown"
-              ) || [];
-
-            markdown += `| ${headers.join(" | ")} |\n`;
-            markdown += `|${headers.map(() => "---").join("|")}|\n`;
-
-            // Add type row if we have field information
-            if (result.fields && types.length > 0) {
-              markdown += `| ${types.map((t) => `*${t}*`).join(" | ")} |\n`;
-            }
-
-            // Add data rows
-            for (const row of result.rows) {
-              const values = headers.map((h) => {
-                const val = row[h];
-                if (val === null) return "*null*";
-                if (val === "") return "*empty*";
-                if (typeof val === "object") return JSON.stringify(val);
-                return String(val);
-              });
-              markdown += `| ${values.join(" | ")} |\n`;
-            }
-          } else if (result.command) {
-            markdown += `*Query executed successfully*`;
-          } else {
-            markdown += `*No rows returned*`;
+          // Add data rows
+          for (const row of result.rows) {
+            const values = headers.map((h) => {
+              const val = (row as Record<string, unknown>)[h];
+              if (val === null) return "*null*";
+              if (val === "") return "*empty*";
+              if (typeof val === "object") return JSON.stringify(val);
+              return String(val);
+            });
+            markdown += `| ${values.join(" | ")} |\n`;
           }
+        } else if (result.command) {
+          markdown += `*Query executed successfully*`;
+        } else {
+          markdown += `*No rows returned*`;
+        }
 
-          return createMarkdownResponse(markdown);
-        });
+        return createMarkdownResponse(markdown);
       } catch (error) {
-        return createEnhancedErrorResponse(error, query, connectionString);
+        return createEnhancedErrorResponse(error, query, dbClient);
       }
     },
   };
 }
 
-export function createDescribeTableTool(connectionString: string) {
+export function createDescribeTableTool(dbClient: DatabaseClient) {
   return {
     name: "describe-table",
     description:
@@ -295,7 +277,7 @@ export function createDescribeTableTool(connectionString: string) {
       includeSampleRows?: boolean;
     }) => {
       try {
-        return await executeWithClient(connectionString, async (client) => {
+        return await dbClient.executeWithClient(async (client) => {
           const structureQuery = `
             SELECT 
               c.column_name,
@@ -791,7 +773,7 @@ export function createDescribeTableTool(connectionString: string) {
   };
 }
 
-export function createDescribeFunctionsTool(connectionString: string) {
+export function createDescribeFunctionsTool(dbClient: DatabaseClient) {
   return {
     name: "describe-functions",
     description: "Get function signatures from the database",
@@ -803,7 +785,7 @@ export function createDescribeFunctionsTool(connectionString: string) {
     },
     handler: async ({ schemaName = "public" }: { schemaName?: string }) => {
       try {
-        return await executeWithClient(connectionString, async (client) => {
+        return await dbClient.executeWithClient(async (client) => {
           const functionsQuery = `
             SELECT 
               p.proname as function_name,
@@ -863,7 +845,7 @@ export function createDescribeFunctionsTool(connectionString: string) {
   };
 }
 
-export function createListTablesTool(connectionString: string) {
+export function createListTablesTool(dbClient: DatabaseClient) {
   return {
     name: "list-tables",
     description: "List all tables in a schema with row counts",
@@ -875,7 +857,7 @@ export function createListTablesTool(connectionString: string) {
     },
     handler: async ({ schemaName = "public" }: { schemaName?: string }) => {
       try {
-        return await executeWithClient(connectionString, async (client) => {
+        return await dbClient.executeWithClient(async (client) => {
           const tablesQuery = `
             SELECT 
               t.table_name,
@@ -942,7 +924,7 @@ export function createListTablesTool(connectionString: string) {
   };
 }
 
-export function createGetFunctionDefinitionTool(connectionString: string) {
+export function createGetFunctionDefinitionTool(dbClient: DatabaseClient) {
   return {
     name: "get-function-definition",
     description: "Get the complete definition of a single RPC function",
@@ -963,7 +945,7 @@ export function createGetFunctionDefinitionTool(connectionString: string) {
       schemaName?: string;
     }) => {
       try {
-        return await executeWithClient(connectionString, async (client) => {
+        return await dbClient.executeWithClient(async (client) => {
           const functionQuery = `
             SELECT 
               p.proname as function_name,

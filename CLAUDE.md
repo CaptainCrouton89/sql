@@ -21,32 +21,41 @@ A Model Context Protocol (MCP) server providing database and storage capabilitie
 Create `.env.local` with required variables:
 
 ```bash
-# Required for both modes
+# Connection mode: "postgres" or "management-api"
+# - postgres: Direct connection to PostgreSQL (requires port 5432 access)
+# - management-api: Uses Supabase Management API over HTTPS (bypasses port 5432)
+DATABASE_MODE=management-api
+
+# Required for postgres mode
+SUPABASE_CONNECTION_STRING=postgresql://...
+
+# Required for management-api mode
+SUPABASE_PROJECT_REF=your-project-ref
+SUPABASE_ACCESS_TOKEN=your-access-token
+SUPABASE_API_URL=https://api.supabase.com
+
+# Required for storage tools (both modes)
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_KEY=your-service-role-key
 
-# Connection mode (defaults to 'http' - firewall-friendly)
-CONNECTION_MODE=http
-
 # Optional: filter which tools are enabled (comma-separated)
 # ENABLED_TOOLS=execute-sql,list-tables,describe-table
-
-# Only required if using CONNECTION_MODE=postgres
-# SUPABASE_CONNECTION_STRING=postgresql://...
 ```
 
 ## Connection Modes
 
-### HTTP Mode (Default, Recommended)
-- Uses Supabase REST API via `/rest/v1/rpc/execute_sql`
-- Bypasses port 5432 (firewall-friendly)
-- Requires one-time SQL function installation (see `HTTP_MODE_SETUP.md`)
-- Set `CONNECTION_MODE=http`
+### Management API Mode (Recommended)
+- Uses Supabase Management API via `https://api.supabase.com/v1/projects/{ref}/database/query`
+- Bypasses port 5432 completely (firewall-friendly)
+- Works over HTTPS (port 443)
+- No special setup required
+- Set `DATABASE_MODE=management-api`
+- Requires access token from [Supabase Dashboard](https://supabase.com/dashboard/account/tokens)
 
 ### Postgres Mode (Direct Connection)
 - Direct PostgreSQL connection on port 5432
 - May be blocked by firewalls/VPNs
-- Set `CONNECTION_MODE=postgres` and provide `SUPABASE_CONNECTION_STRING`
+- Set `DATABASE_MODE=postgres` and provide `SUPABASE_CONNECTION_STRING`
 
 ## Available Tools
 
@@ -110,11 +119,17 @@ The `execute-sql` tool provides enhanced error guidance:
 - Lists available tables on relation errors
 - Suggests using `describe-table` and `list-tables` tools
 
-### HTTP Mode (src/utils/http-database.ts)
-Executes SQL via Supabase RPC function:
-1. Calls `/rest/v1/rpc/execute_sql` endpoint
-2. Passes query to server-side function
+### Management API Mode (src/utils/management-api.ts)
+Executes SQL via Supabase Management API:
+1. Calls `https://api.supabase.com/v1/projects/{ref}/database/query` endpoint
+2. Authenticates with access token
 3. Returns JSON results formatted as database response
+
+### Database Client Abstraction (src/utils/database-client.ts)
+Unified client supporting both connection modes:
+- Automatically selects mode based on `DATABASE_MODE` environment variable
+- Provides consistent query interface regardless of mode
+- Handles type conversions and error formatting
 
 ### Tool Filtering (src/index.ts:49-50)
 Optional `ENABLED_TOOLS` env var to limit exposed tools:

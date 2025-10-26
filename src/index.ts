@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { config } from "dotenv";
+import { createDatabaseClientFromEnv } from "./utils/database-client.js";
 import {
   createExecuteSqlTool,
   createDescribeTableTool,
@@ -26,8 +27,20 @@ import {
 
 config({ path: ".env.local" });
 
-if (!process.env.SUPABASE_CONNECTION_STRING) {
-  throw new Error("SUPABASE_CONNECTION_STRING is not set");
+// Validate required environment variables based on mode
+const DATABASE_MODE = process.env.DATABASE_MODE === "management-api" ? "management-api" : "postgres";
+
+if (DATABASE_MODE === "postgres") {
+  if (!process.env.SUPABASE_CONNECTION_STRING) {
+    throw new Error("SUPABASE_CONNECTION_STRING is required for postgres mode");
+  }
+} else {
+  if (!process.env.SUPABASE_PROJECT_REF) {
+    throw new Error("SUPABASE_PROJECT_REF is required for management-api mode");
+  }
+  if (!process.env.SUPABASE_ACCESS_TOKEN) {
+    throw new Error("SUPABASE_ACCESS_TOKEN is required for management-api mode");
+  }
 }
 
 if (!process.env.SUPABASE_URL) {
@@ -38,7 +51,8 @@ if (!process.env.SUPABASE_SERVICE_KEY) {
   throw new Error("SUPABASE_SERVICE_KEY is not set");
 }
 
-const CONNECTION_STRING = process.env.SUPABASE_CONNECTION_STRING;
+// Create database client based on mode
+const dbClient = createDatabaseClientFromEnv();
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
@@ -52,27 +66,27 @@ const server = new McpServer({
 
 // Database tools
 if (isToolEnabled('execute-sql')) {
-  const executeSqlTool = createExecuteSqlTool(CONNECTION_STRING);
+  const executeSqlTool = createExecuteSqlTool(dbClient);
   server.tool(executeSqlTool.name, executeSqlTool.description, executeSqlTool.inputSchema, executeSqlTool.handler);
 }
 
 if (isToolEnabled('describe-table')) {
-  const describeTableTool = createDescribeTableTool(CONNECTION_STRING);
+  const describeTableTool = createDescribeTableTool(dbClient);
   server.tool(describeTableTool.name, describeTableTool.description, describeTableTool.inputSchema, describeTableTool.handler);
 }
 
 if (isToolEnabled('describe-functions')) {
-  const describeFunctionsTool = createDescribeFunctionsTool(CONNECTION_STRING);
+  const describeFunctionsTool = createDescribeFunctionsTool(dbClient);
   server.tool(describeFunctionsTool.name, describeFunctionsTool.description, describeFunctionsTool.inputSchema, describeFunctionsTool.handler);
 }
 
 if (isToolEnabled('list-tables')) {
-  const listTablesTool = createListTablesTool(CONNECTION_STRING);
+  const listTablesTool = createListTablesTool(dbClient);
   server.tool(listTablesTool.name, listTablesTool.description, listTablesTool.inputSchema, listTablesTool.handler);
 }
 
 if (isToolEnabled('get-function-definition')) {
-  const getFunctionDefinitionTool = createGetFunctionDefinitionTool(CONNECTION_STRING);
+  const getFunctionDefinitionTool = createGetFunctionDefinitionTool(dbClient);
   server.tool(getFunctionDefinitionTool.name, getFunctionDefinitionTool.description, getFunctionDefinitionTool.inputSchema, getFunctionDefinitionTool.handler);
 }
 
@@ -141,7 +155,8 @@ async function main() {
   try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error(`Supabase MCP Server running with ${ENABLED_TOOLS.length === 0 ? 'all' : ENABLED_TOOLS.length} tools enabled`);
+    const toolCount = ENABLED_TOOLS.length === 0 ? 'all' : ENABLED_TOOLS.length;
+    console.error(`Supabase MCP Server running in ${DATABASE_MODE} mode with ${toolCount} tools enabled`);
   } catch (error) {
     console.error("Error starting server:", error);
     process.exit(1);

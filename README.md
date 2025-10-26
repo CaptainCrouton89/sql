@@ -19,11 +19,51 @@ A Model Context Protocol (MCP) server that provides database and storage capabil
 
 ### Environment Setup
 
-Create a `.env.local` file in the project root:
+Create a `.env.local` file in the project root with one of the following configurations:
 
+#### Option 1: Management API Mode (Recommended - Bypasses Port 5432)
+
+```bash
+# Connection mode
+DATABASE_MODE=management-api
+
+# Required for management-api mode
+SUPABASE_PROJECT_REF=your-project-ref
+SUPABASE_ACCESS_TOKEN=your-access-token
+SUPABASE_API_URL=https://api.supabase.com
+
+# Required for storage tools
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-role-key
 ```
+
+**How to get your access token:**
+1. Go to [https://supabase.com/dashboard/account/tokens](https://supabase.com/dashboard/account/tokens)
+2. Generate a new access token
+3. Copy the token to `SUPABASE_ACCESS_TOKEN`
+
+**Advantages:**
+- Works over HTTPS (port 443)
+- No firewall/VPN issues with port 5432
+- Uses official Supabase Management API
+
+#### Option 2: Direct PostgreSQL Mode (Requires Port 5432 Access)
+
+```bash
+# Connection mode (or omit this line - defaults to postgres)
+DATABASE_MODE=postgres
+
+# Required for postgres mode
 SUPABASE_CONNECTION_STRING=your_supabase_connection_string_here
+
+# Required for storage tools
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-role-key
 ```
+
+**Limitations:**
+- Requires port 5432 to be accessible
+- May be blocked by corporate firewalls/VPNs
 
 ### Build and Install
 
