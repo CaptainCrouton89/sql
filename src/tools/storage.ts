@@ -118,7 +118,7 @@ export function createUploadFileTool(supabaseUrl: string, serviceKey: string) {
         const response = await fetch(url, {
           method,
           headers,
-          body: buffer,
+          body: new Uint8Array(buffer),
         });
 
         const result = await response.json();
