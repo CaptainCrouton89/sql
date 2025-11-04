@@ -1,4 +1,3 @@
-import { Client } from "pg";
 import { z } from "zod";
 import { DatabaseClient } from "../utils/database-client.js";
 import {
@@ -6,29 +5,6 @@ import {
   createGuidedErrorResponse,
   createMarkdownResponse,
 } from "../utils/response.js";
-
-async function getTableStructure(client: Client, tableName: string) {
-  try {
-    const structureQuery = `
-      SELECT 
-        c.column_name,
-        c.data_type,
-        c.is_nullable,
-        c.column_default,
-        c.character_maximum_length,
-        c.numeric_precision,
-        c.numeric_scale
-      FROM information_schema.columns c
-      WHERE c.table_name = $1 
-      ORDER BY c.ordinal_position;
-    `;
-
-    const result = await client.query(structureQuery, [tableName]);
-    return result.rows;
-  } catch {
-    return null;
-  }
-}
 
 async function extractTableFromError(
   error: string,
@@ -61,102 +37,36 @@ async function createEnhancedErrorResponse(
 ) {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
-  // Check for common SQL errors that could benefit from guidance
+  // Provide helpful guidance based on error type
+  let guidance = `### Error Details\n\n`;
+  guidance += `**Query**: \`${query}\`\n\n`;
+
+  // Check for common SQL errors
   const columnError = errorMessage.match(/column "([^"]+)" does not exist/i);
-  const relationError = errorMessage.match(
-    /relation "([^"]+)" does not exist/i
-  );
-  const columnOfRelationError = errorMessage.match(
-    /column "([^"]+)" of relation "([^"]+)"/i
-  );
+  const relationError = errorMessage.match(/relation "([^"]+)" does not exist/i);
 
-  if (columnError || relationError || columnOfRelationError) {
-    try {
-      return await dbClient.executeWithClient(async (client) => {
-        let guidance = "";
-        const tableName = await extractTableFromError(errorMessage, query);
-
-        if (tableName) {
-          const structure = await getTableStructure(client, tableName);
-
-        if (structure && structure.length > 0) {
-          guidance += `### Table Structure for '${tableName}'\n\n`;
-          guidance += `| Column | Type | Nullable | Default |\n`;
-          guidance += `|---|---|---|---|\n`;
-
-          for (const column of structure) {
-            const nullable = column.is_nullable === "YES" ? "✓" : "";
-            const defaultVal = column.column_default || "";
-            const precision = column.numeric_precision
-              ? `(${column.numeric_precision}${
-                  column.numeric_scale ? `,${column.numeric_scale}` : ""
-                })`
-              : "";
-            const length = column.character_maximum_length
-              ? `(${column.character_maximum_length})`
-              : "";
-            const type = `${column.data_type}${precision}${length}`;
-
-            guidance += `| ${column.column_name} | ${type} | ${nullable} | ${defaultVal} |\n`;
-          }
-
-          if (columnError) {
-            const missingColumn = columnError[1];
-            guidance += `\n**The column '${missingColumn}' does not exist**\n`;
-          }
-        } else if (relationError) {
-          // Table doesn't exist, let's list available tables
-          try {
-            const tablesQuery = `
-              SELECT table_name 
-              FROM information_schema.tables 
-              WHERE table_schema = 'public' 
-              AND table_type = 'BASE TABLE'
-              ORDER BY table_name;
-            `;
-            const tablesResult = await client.query(tablesQuery);
-
-            if (tablesResult.rows.length > 0) {
-              guidance += `### Available Tables\n\n`;
-              guidance += tablesResult.rows
-                .map((t: any) => `- ${t.table_name}`)
-                .join("\n");
-              guidance += `\n\n**The table '${tableName}' does not exist**\n`;
-            }
-          } catch {}
-        }
-      }
-
-      if (!guidance) {
-        // Provide general SQL error guidance
-        guidance += `### Common Issues\n\n`;
-        guidance += `- **Column doesn't exist**: Check column names using \`describe-table\`\n`;
-        guidance += `- **Table doesn't exist**: List available tables using \`list-tables\`\n`;
-        guidance += `- **Syntax error**: Review SQL syntax and quotes\n`;
-        guidance += `- **Permission denied**: Check database permissions\n\n`;
-        guidance += `### Next Steps\n\n`;
-        guidance += `1. Use \`list-tables\` to see available tables\n`;
-        guidance += `2. Use \`describe-table\` to see table structure\n`;
-        guidance += `3. Verify column and table names match exactly (case-sensitive)\n`;
-      }
-
-        return createGuidedErrorResponse(error, guidance);
-      });
-    } catch {
-      // If executeWithClient fails (management-api mode), fall through to basic error
+  if (columnError) {
+    const tableName = await extractTableFromError(errorMessage, query);
+    guidance += `### Column Not Found\n\n`;
+    guidance += `The column **"${columnError[1]}"** does not exist.\n\n`;
+    if (tableName) {
+      guidance += `**Suggested action**: Use \`describe-table\` with table name \`${tableName}\` to see available columns.\n\n`;
     }
+  } else if (relationError) {
+    guidance += `### Table Not Found\n\n`;
+    guidance += `The table **"${relationError[1]}"** does not exist.\n\n`;
+    guidance += `**Suggested action**: Use \`list-tables\` to see all available tables.\n\n`;
   }
 
-  // For other errors, provide general guidance
-  let guidance = `### Query Analysis\n\n`;
-  guidance += `**Query**: \`${query}\`\n\n`;
   guidance += `### Debugging Steps\n\n`;
   guidance += `1. Check syntax - Ensure SQL syntax is correct\n`;
-  guidance += `2. Verify permissions - Ensure you have access to the requested resources\n`;
-  guidance += `3. Review data types - Ensure values match column data types\n\n`;
+  guidance += `2. Verify table/column names - Use \`list-tables\` and \`describe-table\`\n`;
+  guidance += `3. Check permissions - Ensure you have access to the requested resources\n`;
+  guidance += `4. Review data types - Ensure values match column data types\n\n`;
+
   guidance += `### Helpful Commands\n\n`;
   guidance += `- \`list-tables\` - See all available tables\n`;
-  guidance += `- \`describe-table\` - Get detailed table structure\n`;
+  guidance += `- \`describe-table <table_name>\` - Get detailed table structure\n`;
   guidance += `- \`describe-functions\` - List available database functions\n`;
 
   return createGuidedErrorResponse(error, guidance);

@@ -27,24 +27,12 @@ import {
 
 config({ path: ".env.local" });
 
-// Validate required environment variables based on mode
-const DATABASE_MODE = process.env.DATABASE_MODE === "management-api" ? "management-api" : "postgres";
-
-if (DATABASE_MODE === "postgres") {
-  if (!process.env.SUPABASE_CONNECTION_STRING) {
-    throw new Error("SUPABASE_CONNECTION_STRING is required for postgres mode");
-  }
-} else {
-  if (!process.env.SUPABASE_PROJECT_REF) {
-    throw new Error("SUPABASE_PROJECT_REF is required for management-api mode");
-  }
-  if (!process.env.SUPABASE_ACCESS_TOKEN) {
-    throw new Error("SUPABASE_ACCESS_TOKEN is required for management-api mode");
-  }
+// Validate required environment variables
+if (!process.env.SUPABASE_PROJECT_REF) {
+  throw new Error("SUPABASE_PROJECT_REF is required");
 }
-
-if (!process.env.SUPABASE_URL) {
-  throw new Error("SUPABASE_URL is not set");
+if (!process.env.SUPABASE_ACCESS_TOKEN) {
+  throw new Error("SUPABASE_ACCESS_TOKEN is required");
 }
 
 if (!process.env.SUPABASE_SERVICE_KEY) {
@@ -53,7 +41,15 @@ if (!process.env.SUPABASE_SERVICE_KEY) {
 
 // Create database client based on mode
 const dbClient = createDatabaseClientFromEnv();
-const SUPABASE_URL = process.env.SUPABASE_URL;
+
+// Construct SUPABASE_URL from project ref
+const SUPABASE_URL = process.env.SUPABASE_URL ||
+  (process.env.SUPABASE_PROJECT_REF ? `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co` : undefined);
+
+if (!SUPABASE_URL) {
+  throw new Error("SUPABASE_URL or SUPABASE_PROJECT_REF is required");
+}
+
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const ENABLED_TOOLS = process.env.ENABLED_TOOLS?.split(',').map(t => t.trim()) || [];
@@ -156,7 +152,7 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     const toolCount = ENABLED_TOOLS.length === 0 ? 'all' : ENABLED_TOOLS.length;
-    console.error(`Supabase MCP Server running in ${DATABASE_MODE} mode with ${toolCount} tools enabled`);
+    console.error(`Supabase MCP Server running with ${toolCount} tools enabled`);
   } catch (error) {
     console.error("Error starting server:", error);
     process.exit(1);

@@ -21,41 +21,31 @@ A Model Context Protocol (MCP) server providing database and storage capabilitie
 Create `.env.local` with required variables:
 
 ```bash
-# Connection mode: "postgres" or "management-api"
-# - postgres: Direct connection to PostgreSQL (requires port 5432 access)
-# - management-api: Uses Supabase Management API over HTTPS (bypasses port 5432)
-DATABASE_MODE=management-api
-
-# Required for postgres mode
-SUPABASE_CONNECTION_STRING=postgresql://...
-
-# Required for management-api mode
+# Required: Your Supabase project reference ID
 SUPABASE_PROJECT_REF=your-project-ref
-SUPABASE_ACCESS_TOKEN=your-access-token
-SUPABASE_API_URL=https://api.supabase.com
 
-# Required for storage tools (both modes)
-SUPABASE_URL=https://your-project.supabase.co
+# Required: Supabase access token (get from https://supabase.com/dashboard/account/tokens)
+SUPABASE_ACCESS_TOKEN=your-access-token-here
+
+# Required: Your Supabase service role key
 SUPABASE_SERVICE_KEY=your-service-role-key
+
+# Optional: Supabase API URL (defaults to https://api.supabase.com)
+# SUPABASE_API_URL=https://api.supabase.com
 
 # Optional: filter which tools are enabled (comma-separated)
 # ENABLED_TOOLS=execute-sql,list-tables,describe-table
 ```
 
-## Connection Modes
+**Note**: `SUPABASE_URL` is automatically constructed from `SUPABASE_PROJECT_REF` as `https://{projectRef}.supabase.co`
 
-### Management API Mode (Recommended)
+## How It Works
+
 - Uses Supabase Management API via `https://api.supabase.com/v1/projects/{ref}/database/query`
 - Bypasses port 5432 completely (firewall-friendly)
 - Works over HTTPS (port 443)
 - No special setup required
-- Set `DATABASE_MODE=management-api`
 - Requires access token from [Supabase Dashboard](https://supabase.com/dashboard/account/tokens)
-
-### Postgres Mode (Direct Connection)
-- Direct PostgreSQL connection on port 5432
-- May be blocked by firewalls/VPNs
-- Set `DATABASE_MODE=postgres` and provide `SUPABASE_CONNECTION_STRING`
 
 ## Available Tools
 
@@ -88,7 +78,7 @@ If no change in output after code changes, remind user to restart CLI.
 - **Server**: McpServer from `@modelcontextprotocol/sdk`
 - **Transport**: StdioServerTransport
 - **Validation**: Zod schemas
-- **Database**: Direct postgres (pg) or HTTP (axios)
+- **Database**: Supabase Management API via HTTPS
 - **Storage**: Supabase Storage REST API
 
 ### Project Structure
@@ -100,11 +90,9 @@ src/
 │   ├── database.ts        # Database introspection and query tools
 │   └── storage.ts         # Storage bucket and file operations
 ├── utils/
-│   ├── database.ts        # Connection pooling and client management
-│   ├── http-database.ts   # HTTP-based SQL execution
+│   ├── database-client.ts # Management API database client
+│   ├── management-api.ts  # HTTP-based SQL execution via Management API
 │   └── response.ts        # Response formatting utilities
-migrations/
-├── 001_execute_sql_function.sql  # Required for HTTP mode
 scripts/
 ├── update-config.js       # Multi-client configuration installer
 ├── build-and-publish.js   # Automated release
@@ -119,19 +107,19 @@ The `execute-sql` tool provides enhanced error guidance:
 - Lists available tables on relation errors
 - Suggests using `describe-table` and `list-tables` tools
 
-### Management API Mode (src/utils/management-api.ts)
+### Management API Implementation (src/utils/management-api.ts)
 Executes SQL via Supabase Management API:
 1. Calls `https://api.supabase.com/v1/projects/{ref}/database/query` endpoint
 2. Authenticates with access token
 3. Returns JSON results formatted as database response
 
-### Database Client Abstraction (src/utils/database-client.ts)
-Unified client supporting both connection modes:
-- Automatically selects mode based on `DATABASE_MODE` environment variable
-- Provides consistent query interface regardless of mode
+### Database Client (src/utils/database-client.ts)
+Simple client wrapper for Management API:
+- Provides consistent query interface
 - Handles type conversions and error formatting
+- Constructs from environment variables automatically
 
-### Tool Filtering (src/index.ts:49-50)
+### Tool Filtering (src/index.ts)
 Optional `ENABLED_TOOLS` env var to limit exposed tools:
 ```typescript
 const isToolEnabled = (toolName: string) =>
@@ -141,12 +129,10 @@ const isToolEnabled = (toolName: string) =>
 ## Security Notes
 
 - Service role key required for full admin access
-- HTTP mode's `execute_sql` function marked `SECURITY DEFINER`
-- Never expose service role key to client-side code
+- Access token required for Management API
+- Never expose service role key or access token to client-side code
 - Storage operations require proper bucket permissions
 
 ## Additional Resources
 
-- `HTTP_MODE_SETUP.md` - Detailed HTTP mode setup guide
 - `README.md` - Installation and usage documentation
-- `migrations/` - SQL migrations for HTTP mode
